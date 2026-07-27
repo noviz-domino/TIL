@@ -44,7 +44,7 @@ jobs:
               blocks = []
               cursor = None
               while True:
-                  url = f'https://api.notion.com/v1/blocks/{block_id}/children?page_size=100'
+                  url = f'[https://api.notion.com/v1/blocks/](https://api.notion.com/v1/blocks/){block_id}/children?page_size=100'
                   if cursor:
                       url += f'&start_cursor={cursor}'
                   res = requests.get(url, headers=headers).json()
@@ -80,8 +80,9 @@ jobs:
                       checked = 'x' if data.get('checked') else ' '
                       line = f'{prefix}- [{checked}] {text}\n'
                   elif btype == 'code':
-                      lang = data.get('language', '')
-                      line = f'```{lang}\n{text}\n```\n\n'
+                      lang = data.get('language', 'text')
+                      code_text = extract_text(data.get('rich_text', []))
+                      line = f'```{lang}\n{code_text}\n```\n\n'
                   elif btype == 'quote':
                       line = f'> {text}\n\n'
                   elif btype == 'callout':
@@ -108,7 +109,7 @@ jobs:
           os.makedirs('TIL', exist_ok=True)
 
           # 2. 노션 데이터베이스 쿼리
-          url = f'https://api.notion.com/v1/databases/{db_id}/query'
+          url = f'[https://api.notion.com/v1/databases/](https://api.notion.com/v1/databases/){db_id}/query'
           payload = {'filter': {'property': 'Published', 'checkbox': {'equals': True}}}
           res = requests.post(url, headers=headers, json=payload).json()
 
@@ -121,13 +122,13 @@ jobs:
                   continue
               title = title_list[0]['plain_text']
 
-              # 2) 날짜 추출 ('Date' 또는 '날짜' 속성 찾아오기)
+              # 2) 날짜 추출
               date_str = ''
               date_prop = props.get('Date') or props.get('날짜') or props.get('Created time')
               
               if date_prop:
                   if date_prop.get('type') == 'date' and date_prop.get('date'):
-                      date_str = date_prop['date'].get('start', '')[:10]  # YYYY-MM-DD
+                      date_str = date_prop['date'].get('start', '')[:10]
                   elif date_prop.get('type') == 'created_time':
                       date_str = date_prop.get('created_time', '')[:10]
 
@@ -143,7 +144,6 @@ jobs:
               # 특수문자 정제
               safe_title = ''.join(c for c in title if c.isalnum() or c in (' ', '_', '-')).strip().replace(' ', '_')
               
-              # 날짜가 있으면 '2026-07-27_제목.md', 없으면 '제목.md'
               if date_str:
                   filename = f'TIL/{date_str}_{safe_title}.md'
               else:
@@ -154,6 +154,6 @@ jobs:
           "
 
       - name: Commit and Push
-        uses: stefanzweifel/git-auto-commit-action@v6
+        uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "docs: Sync TIL with date prefix from Notion"
+          commit_message: "docs: Sync TIL with code block support"
