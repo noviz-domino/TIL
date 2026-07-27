@@ -93,7 +93,6 @@ jobs:
 
                   content += line
 
-                  # 하위 블록(자식 블록)이 존재하는 경우 재귀적으로 가져오기
                   if block.get('has_children'):
                       child_blocks = get_all_blocks(block['id'])
                       next_indent = indent + 1 if btype in ['bulleted_list_item', 'numbered_list_item', 'to_do'] else indent
@@ -103,7 +102,7 @@ jobs:
 
               return content
 
-          # 1. 덮어쓰기를 위해 기존 TIL 폴더 정리
+          # 1. 기존 TIL 폴더 정리
           if os.path.exists('TIL'):
               shutil.rmtree('TIL')
           os.makedirs('TIL', exist_ok=True)
@@ -115,20 +114,40 @@ jobs:
 
           for page in res.get('results', []):
               props = page['properties']
+              
+              # 1) 제목 추출
               title_list = props.get('Name', {}).get('title', [])
               if not title_list:
                   continue
               title = title_list[0]['plain_text']
 
+              # 2) 날짜 추출 ('Date' 또는 '날짜' 속성 찾아오기)
+              date_str = ''
+              date_prop = props.get('Date') or props.get('날짜') or props.get('Created time')
+              
+              if date_prop:
+                  if date_prop.get('type') == 'date' and date_prop.get('date'):
+                      date_str = date_prop['date'].get('start', '')[:10]  # YYYY-MM-DD
+                  elif date_prop.get('type') == 'created_time':
+                      date_str = date_prop.get('created_time', '')[:10]
+
               page_id = page['id']
               page_blocks = get_all_blocks(page_id)
               
               content = f'# {title}\n\n'
+              if date_str:
+                  content = f'# {title}\n> 작성일: {date_str}\n\n'
+              
               content += render_blocks(page_blocks)
 
-              # 파일명 정제
+              # 특수문자 정제
               safe_title = ''.join(c for c in title if c.isalnum() or c in (' ', '_', '-')).strip().replace(' ', '_')
-              filename = f'TIL/{safe_title}.md'
+              
+              # 날짜가 있으면 '2026-07-27_제목.md', 없으면 '제목.md'
+              if date_str:
+                  filename = f'TIL/{date_str}_{safe_title}.md'
+              else:
+                  filename = f'TIL/{safe_title}.md'
 
               with open(filename, 'w', encoding='utf-8') as f:
                   f.write(content)
@@ -137,4 +156,4 @@ jobs:
       - name: Commit and Push
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "docs: Sync complete TIL content from Notion"
+          commit_message: "docs: Sync TIL with date prefix from Notion"
