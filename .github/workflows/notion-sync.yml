@@ -1,9 +1,9 @@
 name: Notion to GitHub Sync
 
 on:
-  workflow_dispatch: # 직접 실행 버튼 지원
+  workflow_dispatch: # 수동 실행 버튼
   schedule:
-    - cron: '0 15 * * *' # 매일 한국 시간 00:00(밤 12시)에 자동 실행
+    - cron: '0 15 * * *' # 매일 한국시간 00:00(밤 12시) 자동 실행
 
 jobs:
   sync:
@@ -13,13 +13,13 @@ jobs:
         uses: actions/checkout@v3
 
       - name: Notion to GitHub Action
-        uses: cronvel/notion-to-github-action@v1.0.0
+        uses: martper/notion-to-github-action@v1.0.0
         with:
           notion-token: ${{ secrets.NOTION_TOKEN }}
           notion-db-id: ${{ secrets.NOTION_DATABASE_ID }}
-          filter-prop: 'Published' # 체크박스 속성 이름
-          file-name-prop: 'Name'     # 노션 제목 속성 이름 (기본값: 이름 또는 Name)
-          output-dir: 'TIL'          # 깃허브에 저장될 폴더 이름
+          filter-prop: 'Published'  # 노션의 체크박스 속성 이름
+          file-name-prop: 'Name'      # 노션의 제목 속성 이름 (노션에 '이름'으로 되어있다면 '이름'으로 변경!)
+          output-dir: 'TIL'           # 깃허브에 만들어질 폴더 이름
 
       - name: Commit and Push
         uses: stefanzweifel/git-auto-commit-action@v4
