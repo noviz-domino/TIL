@@ -1,50 +1,64 @@
-# 📚 Notion to GitHub TIL (Today I Learned)
-## 멀티캠퍼스 A.IM 1회차 TIL
+# 📚 TIL (Today I Learned)
 
-> 노션(Notion)에 작성한 학습 기록을 깃허브(GitHub)에 자동으로 동기화되게 구축되었습니다. 🚀
+## 멀티캠퍼스 A.IM 1회차 학습 기록
 
----
-
-## 🛠️ Tech Stack & Architecture
-
-- **Source**: Notion Database (Published check & Date properties)
-- **Automation**: GitHub Actions (Daily Cron & Manual Workflow Dispatch)
-- **Script**: Python (Notion API Parser & Markdown Converter)
-- **Destination**: GitHub Repository (`/TIL` directory)
+> 매일 배운 것을 마크다운으로 정리합니다. 이 저장소 자체가 **옵시디언 보관함(vault)** 이라, 옵시디언에서 글을 쓰면 그대로 깃허브에 올라갑니다.
 
 ---
 
-## ✨ Key Features
+## 🛠️ 작성 환경
 
-1. **자동 동기화 (Automated Sync)**
-   - 매일 자정(한국 시간 기준)에 GitHub Actions가 실행되어 노션의 최신 글을 자동으로 가져옵니다.
-   - 필요시 깃허브 Actions 탭에서 **`Run workflow`**를 통해 수동으로 즉시 동기화할 수 있습니다.
-   - 다만 노드js 버전처리 오류가 발생하는데 해당부분은 깃헙 자체 버전문제로 보여 신경쓰지 않아도 될듯합니다.
-  
-2. **완벽한 본문 마크다운 변환**
-   - 제목, 단락, 글머리/번호 기호 목록, 투두리스트(`[ ]`)
-   - 토글 메뉴 및 들여쓰기된 하위 블록(`Child blocks`) 구조 보존
-   - 코드 블록(Language Highlighting) 및 콜아웃(Callout) 지원
-  
-3. **날짜 기반 파일 정렬**
-   - 노션의 `Date(날짜)` 속성(또는 생성일)을 자동으로 파싱하여 파일명 앞에 `YYYY-MM-DD_제목.md` 형태로 접두사를 붙입니다.
-   - 깃허브 폴더에서 날짜순으로 깔끔하게 정렬됩니다.
+| 항목 | 내용 |
+|---|---|
+| 편집기 | [Obsidian](https://obsidian.md) — 이 저장소 폴더를 vault로 사용 |
+| 자동 커밋 | [Obsidian Git](https://github.com/Vinzent03/obsidian-git) 플러그인 |
+| 저장 형식 | 순수 마크다운 (`.md`) |
+
+**중간 변환 과정이 없습니다.** 옵시디언에서 편집하는 파일이 곧 깃허브에 올라가는 파일이라, 쓴 그대로 렌더링됩니다.
 
 ---
 
-## 📂 Repository Structure
+## ⚙️ 동작 방식
+
+1. 옵시디언 실행 → 깃허브 최신 내용 자동 `pull`
+2. `TIL/` 폴더에 글 작성, 이미지는 붙여넣기(`Ctrl+V`)
+3. 편집을 멈추고 **5분 뒤** 자동으로 `commit` + `push`
+4. 바로 종료해야 할 땐 `Commit-and-sync and then close Obsidian` 명령 사용
+
+---
+
+## 📂 저장소 구조
 
 ```text
-├── .github/
-│   └── workflows/
-│       └── notion-sync.yml   # GitHub Actions 워크플로우 설정
-├── TIL/
-│   ├── YYYY-MM-DD_제목1.md   # 노션에서 동기화된 TIL 파일들
-│   └── YYYY-MM-DD_제목2.md
-├── sync.py                   # 노션 API 연동 및 마크다운 변환 파이썬 스크립트
+├── TIL/                    # 학습 기록 (YYYY-MM-DD_제목.md)
+├── attachments/            # 글에 첨부한 이미지
+├── .obsidian/              # 옵시디언 설정 (git 추적 제외)
+├── .gitignore
 └── README.md
 ```
 
+---
 
-## 노션 구조
-<img width="1608" height="593" alt="image" src="https://github.com/user-attachments/assets/9ac7cba5-d40e-4740-8aa5-dd69574d18fc" />
+## ✍️ 작성 규칙
+
+- **파일명**: `YYYY-MM-DD_제목.md` — 날짜순 정렬을 위해 날짜를 앞에 둡니다.
+- **이미지**: 전부 `attachments/` 에 모읍니다. 옵시디언에 붙여넣으면 자동으로 저장됩니다.
+- **이미지 링크**: 표준 마크다운(`![](../attachments/파일명.png)`) 형식을 씁니다.
+  옵시디언 기본값인 위키링크(`![[파일명.png]]`)는 **깃허브에서 렌더링되지 않으므로**
+  설정에서 `useMarkdownLinks` 를 켠 상태로 유지합니다.
+
+---
+
+## 📌 이력
+
+원래는 노션에 글을 쓰고, GitHub Actions가 매일 자정 Notion API로 내용을 가져와
+마크다운으로 변환해 커밋하는 방식이었습니다. (`sync.py` + `notion-sync.yml`)
+
+다음 문제로 2026-07-31에 옵시디언 직접 작성 방식으로 전환했습니다.
+
+- 노션의 **이미지 블록이 변환 과정에서 통째로 누락**됨
+- 굵은 글씨, 인라인 코드 등 **서식이 소실**됨
+- 하루 한 번 배치라 작성일과 커밋일이 어긋남
+- 노션이 새 블록 타입을 추가할 때마다 변환 스크립트를 수정해야 함
+
+전환 이후 변환 과정 자체가 사라지면서 위 문제가 모두 해소되었습니다.
