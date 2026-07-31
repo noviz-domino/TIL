@@ -1,0 +1,15 @@
+# Obsidian 설정 폴더
+# workspace.json 이 창 배치만 바꿔도 계속 변경돼서, 자동 커밋이 켜지면
+# 내용 없는 커밋이 계속 쌓입니다. 그래서 통째로 제외합니다.
+.obsidian/
+
+# Obsidian 휴지통 (삭제한 노트가 임시로 들어가는 곳)
+.trash/
+
+# Python
+__pycache__/
+*.pyc
+
+# Windows
+Thumbs.db
+desktop.ini
