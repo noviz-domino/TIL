@@ -68,7 +68,11 @@ Ctrl + P  →  Commit-and-sync  →  Enter
 ```text
 ├── TIL/                    # 학습 기록 (YYYY-MM-DD_제목.md)
 ├── attachments/            # 글에 첨부한 이미지
+├── _templates/             # 옵시디언 템플릿
 ├── .obsidian/              # 옵시디언 설정 (git 추적 제외)
+├── .claude/                # Claude Code 설정과 슬래시 명령
+├── 복습_확인질문.md         # 각 TIL의 확인 질문 모음
+├── 옵시디언_사용법.md       # 사용자용 가이드
 ├── .gitignore
 └── README.md
 ```
