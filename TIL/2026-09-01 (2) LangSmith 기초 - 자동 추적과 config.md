@@ -1,4 +1,14 @@
-# 2026-09-01 (2) LangSmith 기초 — 자동 추적과 config
+---
+tags: [langsmith, langchain, observability, tracing]
+til: v2 2026-09-01
+---
+
+# (2) LangSmith 기초 — 자동 추적과 config
+> 작성일: 2026-09-01
+
+## 🔗 관련 글
+
+- [2026-09-01 LangChain 기초 - Runnable, LCEL 파이프라인, 실습 4종](2026-09-01%20LangChain%20기초%20-%20Runnable,%20LCEL%20파이프라인,%20실습%204종.md) — `Runnable.invoke()`의 뒷부분(오늘 이 안에 추적 로직이 내장돼 있다는 걸 배움)
 
 ## LangSmith가 뭔가
 
@@ -97,3 +107,14 @@ with ls.tracing_context(enabled=True, project_name="langchain-gemini-selective")
 - `config`는 **선택사항**, "나중에 찾기 위한 이름표"이지 자동화도 학습데이터도 아님
 - `tags`/`metadata`는 사람이 직접 준비한 값만 들어감 (AI가 알아서 채워주지 않음)
 - `enabled`(끄고 켜기)와 `project_name`(어디로 보낼지)은 독립된 별개 옵션
+
+---
+
+## ✅ 확인 질문
+
+1. 추적 코드를 전혀 안 썼는데도 LangSmith에 기록이 남는 이유는?
+2. `config`를 안 넘기면 무엇이 "자동으로" 기록되고, 무엇은 기록되지 않는가?
+3. `tags`가 "내용 요약"이 아니라 "코드 경로 표시"라는 말은 무슨 뜻인가? 왜 하드코딩이 가능한가?
+4. LangSmith 라벨링과 fine-tuning용 학습데이터는 목적이 어떻게 다른가?
+5. `enabled=False`와 `project_name`을 동시에 지정하면 왜 아무 데도 기록되지 않는가?
+6. 실전에서 config(이름표)가 없으면 어떤 문제가 생기는가?
