@@ -1,4 +1,15 @@
-# 2026-09-03 TIL — Vector DB, RAG Pipeline, RAG Search 심화
+---
+tags: [vector-db, rag, chroma, hybrid-search, reranking]
+til: v2 2026-09-06
+---
+
+# TIL — Vector DB, RAG Pipeline, RAG Search 심화
+> 작성일: 2026-09-03
+
+## 🔗 관련 글
+
+- [2026-09-02 Tool Agent와 RAG 기초](2026-09-02%20Tool%20Agent와%20RAG%20기초.md) — 임베딩·코사인 유사도·"임베딩(1차)+LLM 리랭킹(2차)" 2단계 구조의 뒷부분(오늘 Re-ranking으로 실제 구현)
+- [2026-09-01 (2) LangSmith 기초 - 자동 추적과 config](2026-09-01%20(2)%20LangSmith%20기초%20-%20자동%20추적과%20config.md) — LangSmith 트레이스 구조의 뒷부분(오늘 체인을 하나로 묶어야 트리 구조로 보이는 이유를 배움)
 
 오늘은 07(Vector DB), 08(RAG Pipeline), 09(RAG Search Advanced) 세 개 노트북을 진행했다.
 
@@ -139,3 +150,17 @@ def rerank(query, docs):
 - Vector DB는 임베딩을 저장하고 빠르게 검색하는 저장소이고, 점수는 기본적으로 거리(작을수록 유사)다.
 - RAG 파이프라인은 검색과 생성을 하나의 LCEL 체인으로 묶어야 LangSmith에서 제대로 된 트리 트레이스가 나온다.
 - 유사도 검색만으로 부족할 때 MMR(다양성), BM25(정확한 용어), Metadata Filter(범위 좁히기), Hybrid(둘의 결합), Re-ranking(LLM 재채점)을 상황에 맞게 골라 쓴다.
+
+---
+
+## ✅ 확인 질문
+
+1. Vector DB에 `persist_directory`를 지정하는 이유는 무엇인가?
+2. `similarity_search_with_score`의 점수를 "높을수록 좋다"로 해석하면 안 되는 이유는?
+3. 검색과 답변 생성을 각각 `.invoke()`하는 것과 하나의 체인으로 묶는 것은 LangSmith 트레이스에서 어떻게 다르게 보이는가?
+4. `RunnablePassthrough.assign()`을 여러 번 이어 붙이면 dict가 어떻게 점점 커지는가?
+5. MMR이 일반 유사도 검색과 다른 점은 무엇인가? `lambda_mult`는 무엇을 조절하는가?
+6. BM25가 벡터 유사도 검색보다 유리한 상황은 언제인가?
+7. 한국어 텍스트에 BM25를 적용할 때 형태소 분석기가 필요한 이유는?
+8. Hybrid Search에서 RRF는 두 검색기의 결과를 어떤 기준으로 합치는가?
+9. Re-ranking 단계에서 전체 문서를 LLM에 다 넣지 못하는 이유는?
