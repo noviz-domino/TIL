@@ -3,7 +3,7 @@ tags: [langgraph, react, tool, messagesstate]
 til: v2 2026-09-10
 ---
 
-# ReAct Agent (Tool, ToolNode, tools_condition, MessagesState)
+# (1) ReAct Agent (Tool, ToolNode, tools_condition, MessagesState)
 > 작성일: 2026-09-09
 
 ## 🔗 관련 글

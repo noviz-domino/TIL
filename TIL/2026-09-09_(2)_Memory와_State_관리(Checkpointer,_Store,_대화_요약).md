@@ -3,12 +3,12 @@ tags: [langgraph, checkpointer, store, memory]
 til: v2 2026-09-10
 ---
 
-# Memory와 State 관리 (Checkpointer, Store, 대화 요약)
+# (2) Memory와 State 관리 (Checkpointer, Store, 대화 요약)
 > 작성일: 2026-09-09
 
 ## 🔗 관련 글
 
-- [2026-09-09_ReAct_Agent(Tool,_ToolNode,_tools_condition,_MessagesState)](2026-09-09_ReAct_Agent%28Tool,_ToolNode,_tools_condition,_MessagesState%29.md) — MessagesState와 add_messages Reducer의 뒷부분(오늘 그 위에 Checkpointer로 대화를 저장/복원하는 법을 얹음)
+- [(1) ReAct Agent (Tool, ToolNode, tools_condition, MessagesState)](2026-09-09_%281%29_ReAct_Agent%28Tool,_ToolNode,_tools_condition,_MessagesState%29.md) — MessagesState와 add_messages Reducer의 뒷부분(오늘 그 위에 Checkpointer로 대화를 저장/복원하는 법을 얹음)
 
 ## 이 노트북이 푸는 문제
 
