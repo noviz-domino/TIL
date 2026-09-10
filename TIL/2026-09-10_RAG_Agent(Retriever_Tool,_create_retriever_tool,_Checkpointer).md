@@ -1,4 +1,17 @@
+---
+tags: [langgraph, rag, retriever-tool, checkpointer, agent]
+til: v2 2026-09-10
+---
+
 # RAG Agent (Retriever Tool, create_retriever_tool, Checkpointer)
+> 작성일: 2026-09-10
+
+## 🔗 관련 글
+
+- [2026-09-09 Memory와 State 관리(Checkpointer, Store, 대화 요약)](2026-09-09_Memory와_State_관리(Checkpointer,_Store,_대화_요약).md) — Checkpointer의 뒷부분(오늘 RAG Agent에 그대로 응용)
+- [2026-09-02 Tool Agent와 RAG 기초](2026-09-02%20Tool%20Agent와%20RAG%20기초.md) — Tool의 name/description/func 구조, RAG 두 단계(인덱싱/질의응답)의 뒷부분
+- [2026-09-03 Vector DB와 RAG 심화](2026-09-03%20Vector%20DB와%20RAG%20심화.md) — Chroma 벡터 저장소의 뒷부분(오늘 컬렉션 개념으로 확장)
+- [2026-07-31 n8n 박스오피스 알림 구축](2026-07-31_n8n_박스오피스_알림_구축.md) — n8n AI Agent 노드의 뒷부분(오늘 코드로 직접 구현한 것과 비교)
 
 ## RAG란 무엇인가
 
