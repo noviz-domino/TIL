@@ -1,8 +1,3 @@
----
-tags: [rag, agent, retriever, tool, langchain, chroma, checkpointer]
-til: v2 2026-09-10
----
-
 # RAG Agent (Retriever Tool, create_retriever_tool, Checkpointer)
 
 ## RAG란 무엇인가
