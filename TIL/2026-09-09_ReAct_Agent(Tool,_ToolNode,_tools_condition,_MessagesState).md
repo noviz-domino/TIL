@@ -1,9 +1,14 @@
 ---
-tags: [langgraph, react, tool, function-calling, agent, messagesstate]
-til: v2 2026-09-09
+tags: [langgraph, react, tool, messagesstate]
+til: v2 2026-09-10
 ---
 
 # ReAct Agent (Tool, ToolNode, tools_condition, MessagesState)
+> 작성일: 2026-09-09
+
+## 🔗 관련 글
+
+- [2026-09-08_LangGraph_기초(State_Node_Edge와_조건부분기_반복_Reducer)](2026-09-08_LangGraph_기초%28State_Node_Edge와_조건부분기_반복_Reducer%29.md) — State/Node/Edge, 조건부 분기, Reducer의 뒷부분(오늘 그 위에 Tool 호출과 ToolNode/tools_condition을 얹음)
 
 ## ReAct 패턴이란
 

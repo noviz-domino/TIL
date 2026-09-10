@@ -1,9 +1,10 @@
 ---
-tags: [langgraph, langchain, agent, state, node, edge, reducer, structured-output]
-til: v2 2026-09-09
+tags: [langgraph, state, node, edge, reducer]
+til: v2 2026-09-10
 ---
 
 # LangGraph 기초(State, Node, Edge와 조건부 분기, 반복, Reducer)
+> 작성일: 2026-09-08
 
 ## Chain의 한계와 LangGraph가 필요한 이유
 
