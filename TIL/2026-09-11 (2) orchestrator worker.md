@@ -1,848 +1,203 @@
-
-
-
-[TIL] LangGraph Orchestrator-Worker 패턴 & 동적 병렬 처리(Send API)
-💡 Today I Learned Summary
-LangGraph에서 사용자 요청에 따라 실행 시점에 하위 작업 개수를 동적으로 결정하고, 여러 Worker를 병렬로 실행하는 Orchestrator-Worker 패턴과 Send API 활용법, 그리고 API 과부하 방지를 위한 Rate Limit 대응 기법에 대해 학습했다.
-
-1. Orchestrator-Worker 패턴이란?
-개념: 입력 요청에 따라 Orchestrator(지휘자 LLM)가 계획을 세워 하위 작업을 분할하고, 여러 Worker(일꾼 LLM)가 각각의 담당 작업을 동적으로 병렬 실행한 뒤, 결과를 하나로 모아 종합하는 패턴.
-
-고정 병렬 처리(18강)와의 차이점:
-
-18강 (고정 병렬 처리): 그래프 작성 시점에 실행할 노드의 종류와 개수가 미리 고정되어 있음.
-
-19강 (Orchestrator-Worker): 실행 시점(Runtime)에 사용자 요청에 따라 필요한 Worker 수(예: 3개 또는 5개)가 동적(Dynamic)으로 결정됨.
-
-2. 핵심 구현 구성 요소
-Orchestrator (create_plan):
-
-사용자 요청을 분석하여 실행할 하위 작업 목록을 생성함.
-
-with_structured_output을 사용해 Pydantic 모델 형태의 구조화된 데이터 목록으로 반환받음.
-
-Send API (동적 Fan-out의 핵심):
-
-라우팅 함수(assign_workers)에서 Send("노드이름", worker_state) 객체 리스트를 반환함.
-
-LangGraph는 리스트의 길이만큼 지정된 Worker 노드를 독립된 입력값과 함께 동적으로 병렬 실행시킴.
-
-Worker (analyze_task):
-
-각 Worker는 전달받은 개별 WorkerState를 기반으로 자기 담당 항목만 집중 분석함.
-
-3. 병렬 처리 문제 해결 공식 (18강 복습 & 응용)
-State 충돌 방지 (Reducer):
-
-여러 Worker가 동일한 State 필드에 결과를 쓸 때 덮어씌워지는 현상을 방지함.
-
-results: Annotated[list, operator.add] 처럼 Reducer를 지정해 리스트 형태로 결과가 차곡차곡 누적되도록 처리함.
-
-순서 엉킴 방지 (task_id 정렬):
-
-비동기/병렬 실행 특성상 Worker의 완료 순서는 매번 달라짐 (비결정적).
-
-Orchestrator가 부여한 task_id(순서 번호표)를 반환값에 포함시키고, 종합 노드(make_report)에서 sorted()로 정렬하여 원래 계획된 순서대로 보고서를 생성함.
-
-4. API 과부하 방지 (Rate Limit & max_concurrency)
-Rate Limit (429 Too Many Requests 에러):
-
-LLM API Provider는 서버 보호를 위해 분당 요청 수(RPM), 토큰 수(TPM) 등을 제한하며, 한계 초과 시 대기열에 넣지 않고 즉시 거절 에러를 보냄.
-
-병렬 Worker가 한 번에 너무 많이 실행되면 Rate Limit에 쉽게 도달함.
-
-해결책 (max_concurrency):
-
-config={"max_concurrency": 3} 옵션을 설정하여 동시에 실행되는 Worker의 최대 개수를 제한함.
-
-전체 작업이 많더라도 정해진 개수만큼 순차적으로 밸브를 조절하여 프로그램이 튕기는 것을 방지함.
-
-
-================================================================================
-📝 TODAY I LEARNED: LangGraph Orchestrator-Worker Architecture
-================================================================================
-
-1. 개념 요약 (Overview)
---------------------------------------------------------------------------------
-LangGraph의 Orchestrator-Worker 패턴은 복잡하고 거대한 하나의 요청을 
-중앙 지휘자(Orchestrator)가 여러 개의 작은 작업 단위로 나누어(Sub-tasks) 계획을 
-수립한 뒤, 다수의 일꾼(Worker)에게 작업을 동적으로 분배하여 병렬 처리하는 
-구조이다.
-
-이 패턴을 안전하고 예측 가능하게 구현하기 위해서는 
-(1) LLM의 출력을 강제하는 Pydantic 스키마, 
-(2) 노드 간 데이터 전달 및 병합을 관리하는 State 구조,
-(3) 전체 흐름을 제어하는 Orchestrator 노드 로직의 정교한 설계가 필수적이다.
-
-
-2. Pydantic 스키마를 통한 구조화된 출력 (Structured Output)
---------------------------------------------------------------------------------
-LLM은 기본적으로 자유 서술형 텍스트를 반환하므로, 이를 시스템에서 안전하게 
-파싱하여 다음 작업으로 넘기기 위해서는 출력을 엄격하게 강제해야 한다.
-
-- BaseModel
-  * 파이썬 객체의 데이터 구조와 타입을 검증하는 Pydantic의 기본 클래스.
-  * LLM이 반환해야 할 데이터의 전체 틀을 정의할 때 사용함.
-
-- Field(description=...)
-  * 단순히 필드 타입을 명시하는 것에 그치지 않고, 해당 필드가 어떤 데이터를 
-    담아야 하는지 LLM에게 전달되는 지시문(Prompt) 역할을 겸함.
-  * 지시문을 명확히 작성할수록 LLM이 올바른 데이터를 생성할 확률이 높아짐.
-
-- llm.with_structured_output(Schema)
-  * LLM 체인에 Pydantic 스키마를 결합하는 메서드.
-  * LLM은 반환 형식을 자유 텍스트가 아닌, 정의된 Pydantic 객체 형태(JSON)로 
-    출력하도록 동작 방식이 제한됨.
-
-[구조 예시 개념]
-CurriculumItem  -> 개별 학습 단위 (task_id, title, description)
-CurriculumPlan  -> 개별 단위들을 담는 리스트 구조 (items: list[CurriculumItem])
-
-
-3. LangGraph State Architecture (상태 관리 구조)
---------------------------------------------------------------------------------
-LangGraph에서 State는 각 노드(Node)들이 데이터를 공유하고 주고받기 위한 
-"공유 메모장" 역할을 수행한다.
-
-(1) TypedDict와 State 정의
-- 단순히 데이터를 담는 딕셔너리(`dict`) 대신 `TypedDict`를 상속받아 정의함.
-- 목적:
-  * 개발 단계에서 오타 및 잘못된 키 호출을 미연에 방지하는 타입 안전성 확보.
-  * 어떤 노드가 어떤 메모장 변수를 참조하고 수정하는지 보여주는 "공식 계약서" 역할.
-  * LangGraph 엔진이 상태 변경 규칙(Reducer)을 인식할 수 있는 틀 제공.
-
-(2) BaseModel vs TypedDict (State)의 역할 구분
-- BaseModel: LLM 답변의 내용물과 형식 자체를 엄격하게 검증하고 강제하는 도구.
-- TypedDict (State): 검증된 결과물 및 노드 간 필요한 변수를 담고 돌려쓰는 메모장.
-
-(3) 이중 State 구조 (CourseState vs WorkerState)
-- CourseState (메인 상태 메모장):
-  * 전체 그래프 파이프라인 전반에서 유지되는 글로벌 공유 메모장.
-  * 사용자 원본 요청(`request`), 생성된 목차(`items`), 작업 결과 집합(`results`), 
-    최종 종합 결과물(`final_material`) 등을 관리함.
-- WorkerState (개별 일꾼 메모장):
-  * 메인 메모장의 모든 데이터를 일꾼에게 전달할 필요가 없으므로 만든 서브 메모장.
-  * 개별 Worker가 본인에게 부여된 작업(`task_id`, `title`, `description`)만 
-    집중해서 처리하도록 독립적으로 전달되는 컨텍스트.
-
-(4) Reducer (`Annotated[list, operator.add]`)
-- 메인 메모장(`CourseState`) 내 병렬 작업 결과가 들어오는 변수(`results`)에 선언.
-- 역할:
-  * 여러 Worker 노드가 동시에 결과를 작성하여 돌려줄 때, 기본 동작인 
-    "덮어쓰기(Overwrite)"를 방지함.
-  * 기존 리스트 데이터 뒤에 새로운 결과물을 차곡차곡 이어 붙이는 `+` 연산 
-    (List Concatenation) 규칙을 LangGraph 엔진에 부여함.
-- 중요 포인트:
-  * Reducer 선언(`Annotated`)은 오직 데이터가 집계되는 메인 State 필드에만 적용.
-  * Worker 내부 처리 로직이나 Worker의 단일 `return` 문에는 사용하지 않음.
-
-
-4. Orchestrator 노드 로직의 작동 원리
---------------------------------------------------------------------------------
-Orchestrator 노드는 메인 State를 전달받아 전체 실행 계획(목차)을 수립하는 
-첫 번째 핵심 노드이다.
-
-- Step 1: 메인 State 참조
-  * `state["request"]`를 통해 공유 메모장에서 사용자의 원본 주문 내용을 읽어옴.
-- Step 2: Structured LLM 호출
-  * `llm.with_structured_output(CurriculumPlan)`을 적용하여 작성된 LLM을 호출.
-  * 사용자 요청 문장을 입력 프롬프트로 전달하여 구조화된 목차 데이터 획득.
-- Step 3: 메인 State 업데이트
-  * LLM이 반환한 `CurriculumPlan` 객체에서 목차 리스트(`response.items`)를 추출.
-  * `return {"items": response.items}` 형태로 딕셔너리를 반환함.
-  * LangGraph 엔진이 이 반환값을 받아 `CourseState`의 `items` 키에 자동 반영함.
-
-
-5. 핵심 시사점 및 차후 진행 단계
---------------------------------------------------------------------------------
-- State를 잘 설계하는 것은 복잡한 Multi-Agent 파이프라인의 안정성을 결정짓는 
-  가장 중요한 기반 작업임.
-- Orchestrator 노드가 세운 계획(`items`)을 바탕으로, 다음 단계에서는 `Send` API를 
-  활용해 각 목차 아이템을 Worker 노드들에게 동적으로 라우팅(분배)하는 로직으로 이어짐.
-================================================================================
-
-
-
-
-
-
-
-
-# LangGraph 병렬 학습 자료 실습 코드
-
-## 학습 목표
-
-LangGraph를 이용해 학습 자료를 자동으로 만드는 코드를 한 줄씩 이해한다.
-특히 다음 개념을 중심으로 정리한다.
-
-- Pydantic `BaseModel`
-- `Field`
-- LangGraph State
-- `TypedDict`
-- LLM 구조화 출력과 Graph State의 연결
-- 필드 이름과 데이터 전달 관계
-
+---
+tags: [langgraph, orchestrator-worker, send-api, dynamic-parallelization, structured-output]
+til: v2 2026-09-14
 ---
 
-# 1. 환경변수와 LLM 설정
+# (2) LangGraph Orchestrator-Worker 패턴 & Send API로 동적 병렬 처리
+> 작성일: 2026-09-11
 
-## `load_dotenv(override=True)`
+## 🔗 관련 글
 
-```python
-load_dotenv(override=True)
-```
+- [(1) LangGraph 병렬 처리(Parallelization) & Voting 패턴](2026-09-11%20(1)%2018-parallelization.md) — 같은 날 먼저 배운 "고정 개수" 병렬 처리, 이 글은 그걸 "동적 개수"로 확장한 것
+- [(1) ReAct Agent (Tool, ToolNode, tools_condition, MessagesState)](2026-09-09_(1)_ReAct_Agent(Tool,_ToolNode,_tools_condition,_MessagesState).md) — `add_conditional_edges`와 라우팅 함수를 처음 다룬 글
+- [(2) Memory와 State 관리 (Checkpointer, Store, 대화 요약)](2026-09-09_(2)_Memory와_State_관리(Checkpointer,_Store,_대화_요약).md) — State/TypedDict, `state["키"]` 접근 방식이 이어짐
 
-`.env` 파일에 저장해 둔 환경변수 값을 프로그램에서 사용할 수 있도록 불러오는 함수이다.
+## 1. 18번(고정 병렬)과 뭐가 다른가
 
-예를 들어 `.env`에 다음과 같이 있을 수 있다.
+18번 노트북에서는 병렬로 실행할 노드의 **종류와 개수가 그래프를 짜는 시점에 이미 정해져 있었다** (`legal_analysis`, `financial_analysis`, `technical_analysis` 셋).
 
-```text
-GOOGLE_API_KEY=...
-```
+19번(Orchestrator-Worker)은 다르다. **실행해봐야(런타임에) 몇 개의 하위 작업이 필요한지 알 수 있다.** 예를 들어 "파이썬 학습 자료를 만들어줘"라는 요청에 대해 LLM이 목차를 3개로 짤 수도, 5개로 짤 수도 있다. 이 "몇 개일지 미리 모르는" 병렬 작업을 다루는 게 이 패턴의 핵심이다.
 
-`load_dotenv()`가 `.env`를 읽어서 환경변수로 사용할 수 있게 만든다.
+패턴 구조:
 
-### `override=True`의 의미
+> 사용자 요청 → **Orchestrator**(지휘자 LLM)가 계획을 세워 하위 작업으로 분할 → 여러 **Worker**(일꾼)가 각자 담당 작업을 동적으로 병렬 실행 → 결과를 하나로 모아 종합
 
-운영체제나 실행 환경에 같은 이름의 환경변수가 이미 존재할 수도 있다.
+## 2. 두 개의 State: CourseState와 WorkerState
 
-- 기본값: 이미 존재하는 환경변수를 우선
-- `override=True`: `.env`의 값을 우선해서 덮어씀
-
-즉,
-
-> `.env`에 적어놓은 값을 기존 환경변수보다 우선해서 사용하겠다.
-
-라는 의미이다.
-
----
-
-## `MODEL_NAME = "gemini-3.6-flash"`
+이 패턴은 State를 두 종류로 나눠서 쓴다.
 
 ```python
-MODEL_NAME = "gemini-3.6-flash"
+class CourseState(TypedDict):
+    request: str                              # 사용자의 전체 학습 요청
+    items: list[CurriculumItem]               # Orchestrator가 생성한 목차
+    results: Annotated[list, operator.add]    # 여러 Worker의 결과를 누적
+    final_material: str                       # 최종적으로 완성된 학습 자료
+
+
+class WorkerState(TypedDict):
+    request: str          # 전체 학습 요청 (Worker도 큰 그림을 참고하려고 복사해서 가짐)
+    task_id: int           # 목차의 순서를 기억하기 위한 번호
+    title: str             # Worker가 담당하는 목차 제목
+    description: str       # Worker가 담당하는 목차 설명
 ```
 
-사용할 모델 이름을 문자열로 변수에 저장한다.
+- `CourseState` = 그래프 전체가 공유하는 큰 작업판.
+- `WorkerState` = Worker 한 명이 자기 몫만 처리하는 데 필요한 값만 모아둔, 작은 "작업 지시서".
 
-`MODEL_NAME`은 개발자가 정한 변수 이름이다.
+`request`가 두 State에 똑같이 들어있는 건 우연이 아니다. Worker가 자기 목차(예: "조건문")만 알아도 되지만, 전체적으로 뭘 만들려는지도 참고해야 좋은 글이 나오기 때문에 복사해서 넘겨준다.
 
-모델 이름 자체는 비밀키가 아니므로 코드에 직접 적어도 된다.
-반면 API 키 같은 비밀 정보는 일반적으로 `.env` 등에 저장한다.
+`task_id`는 서로 다른 Worker를 구분하는 값이 아니라, **병렬 실행이 끝난 뒤 결과를 원래 목차 순서대로 다시 정렬하기 위한 번호표**다 (병렬 실행은 완료 순서가 보장되지 않으므로).
 
----
-
-## `llm = ChatGoogleGenerativeAI(model=MODEL_NAME)`
-
-```python
-llm = ChatGoogleGenerativeAI(model=MODEL_NAME)
-```
-
-Google의 Gemini 모델을 사용하기 위한 LLM 객체를 설정한다.
-
-중요한 점:
-
-> 이 줄 자체가 LLM에게 질문을 보내는 것은 아니다.
-
-실제 모델 호출은 뒤에서 사용하는 `invoke()`가 담당한다.
-
-```python
-llm.invoke(...)
-```
-
-정리하면:
-
-- `ChatGoogleGenerativeAI(...)` → 사용할 LLM을 설정/준비
-- `invoke(...)` → 실제로 LLM을 호출
-
----
-
-# 2. `CurriculumItem` - 학습 목차 하나의 구조
+## 3. Orchestrator — 구조화된 출력으로 목차 짜기
 
 ```python
 class CurriculumItem(BaseModel):
+    title: str = Field(description="학습 목차 제목")
+    description: str = Field(description="해당 목차에서 다룰 세부 학습 내용 요약")
+
+class CurriculumPlan(BaseModel):
+    items: list[CurriculumItem] = Field(description="생성된 학습 목차 리스트 (3~5개)")
+
+
+def create_curriculum(state: CourseState):
+    planner = llm.with_structured_output(CurriculumPlan)   # 구조화된 출력 강제
+    plan = planner.invoke(f"...\n\n요청:\n{state['request']}")
+    return {"items": plan.items}
 ```
 
-`class`는 데이터를 일정한 구조로 묶어서 사용할 수 있도록 새로운 구조를 정의하는 문법이다.
+- `BaseModel`은 Pydantic이 제공하는 클래스로, "LLM이 반환해야 할 데이터의 모양"을 정의한다. `TypedDict`(State용)와는 목적이 다르다 — `BaseModel`은 **검증까지 해주는** 모델이고, `TypedDict`는 그냥 "이런 모양이어야 한다"는 타입 힌트만 주고 검증은 안 한다.
+- `Field(description=...)`은 필수는 아니지만, LLM에게 "이 칸에 뭘 채워야 하는지" 힌트를 더 정확히 주는 역할을 한다.
+- `with_structured_output(CurriculumPlan)`은 원래 `llm`을 바꾸는 게 아니라 **새 llm 객체(`planner`)를 만들어서** 돌려준다(`bind_tools`와 같은 패턴). 실제 API 호출은 이 줄이 아니라 `.invoke()`가 실행되는 순간 일어난다.
+- `with_structured_output`이 받을 수 있는 건 아무 클래스나가 아니라, **`BaseModel`, `TypedDict`, JSON 스키마 딕셔너리처럼 "자기 모양을 스키마로 변환하는 기능"을 가진 것들뿐**이다. 평범한 파이썬 클래스는 이 기능이 없어서 못 쓴다.
 
-`CurriculumItem`은 개발자가 붙인 이름이다.
+노드의 반환값은 항상 딕셔너리다. `{"items": plan.items}`처럼 **"어느 State 필드(칸)에, 어떤 값을 넣을지"를 키-값 쌍으로 알려줘야** LangGraph가 어디에 병합할지 알 수 있기 때문이다. 그리고 Orchestrator가 `llm`이 아니라 `planner`(구조화 출력)를 쓴 것과 달리, 뒤에 나올 Worker는 자유 서술형 글을 써야 하므로 그냥 `llm`을 그대로 쓴다 — **"노드가 LLM을 쓴다"고 해서 반환값이 항상 텍스트인 건 아니고, 어떤 llm을 쓰고 결과를 어떻게 가공해서 반환할지는 노드 코드가 직접 정한다.**
 
-의미상:
-
-> 학습 목차 하나를 표현하는 구조
-
-이다.
-
-`BaseModel`은 Pydantic에서 제공하는 기본 모델 클래스이다.
-
-Pydantic은 LLM이 아니다.
-LLM은 내용을 생성하고, Pydantic은 생성된 구조화 데이터를 정의하고 검증/관리하는 역할을 한다.
-
----
-
-## `BaseModel`은 왜 사용하는가?
-
-LLM에게 단순히 다음과 같이 프롬프트를 줄 수도 있다.
-
-```text
-title: 변수와 자료형
-description: 파이썬의 기본 자료형을 학습
-```
-
-하지만 이렇게 하면 결과가 기본적으로 문자열이다.
-
-프로그램에서 사용하려면 문자열을 다시 파싱해야 할 수 있다.
-
-Pydantic `BaseModel`을 이용하면 LLM의 출력 구조를 프로그램에서 사용할 수 있는 형태로 정의할 수 있다.
-
-예:
+## 4. Send API — 동적으로 몇 벌을 복제할지 정하기
 
 ```python
-class CurriculumItem(BaseModel):
-    title: str
-    description: str
+def assign_learning_workers(state: CourseState):
+    return [
+        Send(
+            "generate_section",
+            {
+                "request": state["request"],
+                "task_id": task_id,
+                "title": item.title,
+                "description": item.description,
+            },
+        )
+        for task_id, item in enumerate(state["items"])
+    ]
 ```
 
-이렇게 하면:
+이 함수는 노드가 아니라 **라우팅 함수**(그래프 그림에서는 `add_node`로 등록되지 않는다)다. `enumerate(state["items"])`로 목차를 하나씩 돌면서, 목차 개수만큼 `Send` 객체를 만들어 리스트로 반환한다.
 
-- `title`이라는 필드
-- `description`이라는 필드
+`Send("generate_section", {...})`는 "이 내용물을, `generate_section`이라는 노드한테 보낸다"는 택배 같은 것이다. 두 번째 인자(딕셔너리)는 `WorkerState`의 4개 키와 정확히 일치해야 한다 — Worker가 받는 `state`가 바로 이 딕셔너리 자체이기 때문이다.
 
-를 가진 구조화된 데이터를 기대할 수 있다.
-
----
-
-# 3. `Field`
+그래프에 연결할 때는 이렇게 쓴다.
 
 ```python
-title: str = Field(description="학습 목차 제목")
-```
-
-이 한 줄에는 여러 요소가 들어 있다.
-
-### `title`
-
-`title`은 필드 이름이다.
-
-### `: str`
-
-`str`은 타입 힌트이다.
-
-즉:
-
-> title이라는 필드에는 문자열이 들어간다.
-
-라는 뜻이다.
-
-### `= Field(...)`
-
-`Field()`는 해당 필드에 대한 설정/메타데이터를 추가한다.
-
-여기서:
-
-```python
-description="학습 목차 제목"
-```
-
-의 `description`은 `Field`가 제공하는 설정 이름이다.
-
-따라서 왼쪽의 `title`, 오른쪽 `Field()` 안의 `description`은 서로 다른 역할이다.
-
----
-
-## `Field`에서 사용할 수 있는 설정 예
-
-### `description`
-
-필드의 설명을 붙인다.
-
-```python
-Field(description="학습 목차 제목")
-```
-
-### `default`
-
-기본값을 지정할 수 있다.
-
-```python
-Field(default="제목 없음")
-```
-
-### `examples`
-
-예시를 제공할 수 있다.
-
-여러 예시를 넣을 수도 있다.
-
-```python
-Field(
-    examples=["변수와 자료형", "조건문", "반복문"]
+builder.add_conditional_edges(
+    "create_curriculum",
+    assign_learning_workers,
+    ["generate_section"],   # path_map: 이 라우터가 갈 수 있는 목적지 목록
 )
 ```
 
-`examples`는 여러 값을 허용한다는 뜻이 아니라, 참고용 예시를 여러 개 제공할 수 있다는 뜻이다.
+- 12번 노트북의 `tools_condition`처럼 반환값 자체가 노드 이름과 같은 문자열이면 세 번째 인자(공식 이름 `path_map`)를 생략할 수 있다. 하지만 `assign_learning_workers`는 문자열이 아니라 **`Send` 객체 리스트**를 반환하므로, LangGraph가 코드만 보고 "이게 어디로 갈지" 미리 알 수 없다. 그래서 `["generate_section"]`으로 "그래프를 짜는 시점"에 미리 목적지를 알려줘야 한다. (이건 어디까지나 그래프 구조를 그리기 위한 힌트이고, 실제 실행 결과와는 무관하다.)
+- `add_conditional_edges`에는 `then`이라는 네 번째 매개변수도 있다. "이 갈림길에서 어디로 가든, 그다음엔 무조건 이 노드로 가라"는 뜻이며, 이 노트북에서는 `then` 대신 별도의 `add_edge`로 같은 효과를 냈다.
 
-### `alias`
+> ➕ **"몇 번 갈지"를 판단하는 함수인 이유**
+> 목적지 노드는 항상 `generate_section` 하나로 고정이다. 판단하는 건 "어디로 갈지"가 아니라 **"같은 노드를 몇 벌 복제해서, 각자 다른 내용을 들려 보낼지"**다. `add_edge`는 "A가 끝나면 무조건 B로 한 번 간다"만 표현할 수 있어서, "몇 벌을 만들지"라는 개념 자체가 없다. 그래서 실행되는 그 순간 `state["items"]`를 실제로 세어보고 몇 벌을 만들지 계산해주는 함수가 필요했다.
 
-외부에서 사용하는 이름을 별도로 지정할 수 있다.
+## 5. Worker — 자기 몫만 쓰고, 리스트에 담아 반환
 
-예를 들어 내부적으로는 `title`을 사용하지만 외부 데이터에서는 다른 이름을 사용할 수 있다.
+```python
+def generate_section(state: WorkerState):
+    result = llm.invoke(f"...\n\n전체 요청:\n{state['request']}\n담당 목차:\n{state['title']}\n...")
+    return {
+        "results": [{
+            "task_id": state["task_id"],
+            "title": state["title"],
+            "content": result.text,
+        }]
+    }
+```
 
-이 실습에서는 `alias`가 필요하지 않다.
+- `result.text`는 LangGraph가 아니라 **LangChain**(`langchain_core`)의 `AIMessage`가 가진 속성이다. `.content`가 원래 표준 속성인데, 멀티모달 등으로 복잡한 형태가 올 수도 있어서, "순수 텍스트만 편하게 꺼내는" 편의 속성으로 `.text`가 추가됐다.
+- `results`에 `{...}` 하나를 바로 반환하지 않고 `[{...}]`처럼 **리스트로 감싸서** 반환하는 이유는, `CourseState.results`에 `Annotated[list, operator.add]` reducer가 걸려있기 때문이다. 리스트끼리는 `+`로 이어붙일 수 있지만 딕셔너리끼리는 안 되므로, 반드시 리스트로 감싸야 한다.
+
+## 6. 결과 취합 — 정렬 후 다시 다듬기
+
+```python
+def assemble_course_material(state: CourseState):
+    sorted_results = sorted(state["results"], key=lambda x: x["task_id"])
+    full_content = "\n\n".join(
+        f"## {item['title']}\n{item['content']}"
+        for item in sorted_results
+    )
+    result = llm.invoke(f"...\n\n개별 학습 단원:\n{full_content}")
+    return {"final_material": result.text}
+```
+
+- `sorted(..., key=lambda x: x["task_id"])`: Worker는 병렬로 실행되므로 완료 순서가 뒤죽박죽일 수 있다. `task_id` 기준으로 다시 정렬해서 원래 목차 순서를 되살린다. `lambda x: x["task_id"]`는 "정렬 기준을 그 자리에서 즉석으로 만드는 이름 없는 함수"다.
+- `"\n\n".join(f"..." for item in sorted_results)`: 괄호 `( )` 없이 `for`가 붙어있으면 **generator expression**이다. 대괄호 `[ ]`를 쓰는 **list comprehension**과 문법 구조(값이 먼저, `for`가 나중 — 수학의 집합 표기법 `{ x² | x ∈ S }`에서 온 방식)는 같지만, list comprehension은 실행 즉시 리스트 전체를 메모리에 만들어두는 반면, generator는 "누가 다음 값을 달라고 요청할 때"(`join()`이 그 역할) 그때그때 하나씩만 계산해서 넘겨준다. `join()`은 어차피 값을 순서대로 한 번씩만 쓰고 버릴 거라 리스트로 안 만들고 generator로 충분하다.
+- Worker는 서로 독립적으로 자기 단원만 썼기 때문에 문체가 어색하게 겹칠 수 있다. 그래서 마지막에 `llm.invoke(...)`를 한 번 더 불러 전체를 하나의 자연스러운 글로 다듬는다.
+
+## 7. 그래프 조립과 실행
+
+```python
+builder = StateGraph(CourseState)
+builder.add_node("create_curriculum", create_curriculum)
+builder.add_node("generate_section", generate_section)
+builder.add_node("assemble_course_material", assemble_course_material)
+
+builder.add_edge(START, "create_curriculum")
+builder.add_conditional_edges("create_curriculum", assign_learning_workers, ["generate_section"])
+builder.add_edge("generate_section", "assemble_course_material")   # 병렬로 흩어진 Worker가 다 끝날 때까지 자동으로 기다렸다가 실행 (join point)
+builder.add_edge("assemble_course_material", END)
+
+course_graph = builder.compile()   # 아직 실행 아님 — 실행 가능한 상태로 완성된 설계도일 뿐
+```
+
+`compile()`까지는 준비 단계고, 실제로 그래프를 실행시키는 건 다음 줄이다.
+
+```python
+for chunk in course_graph.stream(
+    {"request": course_request},
+    stream_mode="updates",
+    config={"max_concurrency": 3},
+):
+    for node_name, update in chunk.items():
+        ...
+```
+
+- `.invoke()`는 끝날 때까지 기다렸다가 최종 결과만 한 번에 주고, `.stream()`은 노드가 하나 끝날 때마다 그 즉시 결과를 흘려보내 준다. 노드가 실제로 끝나는 시점 = chunk가 도착하는 시점이라 **진짜 실시간**이지만, "토큰 단위 타이핑 효과"의 실시간은 아니다 — 그건 `stream_mode="messages"`가 하는 일이고, 그러려면 노드 안의 LLM 호출도 `.invoke()`가 아니라 `.stream()`으로 바꿔야 한다.
+- `stream_mode` 옵션: `"values"`(매번 State 전체), `"updates"`(방금 바뀐 부분만, 지금 코드가 쓰는 것), `"messages"`(토큰 단위 실시간), `"custom"`, `"debug"`, `"checkpoints"`, `"tasks"` 등이 있다. **어떤 모드를 쓰든 토큰 소모량(비용)은 동일하다** — 모드는 "이미 일어난 호출의 결과를 어떻게 포장해서 보여줄지"만 정하지, LLM 호출 횟수 자체를 바꾸지 않는다.
+- `chunk`는 매 반복마다 **덮어씌워지는 임시 변수**다. 13번 노트북에서 배운 Checkpointer/Store 같은 "나중에 다시 꺼내 쓸 memory"가 아니라, 정반대로 "그 순간만 보고 버리는 값"이다. 반면 State 내부의 `results`(reducer가 걸린 필드)는 실제로 계속 누적된다 — 누적은 State 안에서 일어나고, `chunk`는 그 누적 과정 중 "이번에 새로 추가된 조각 하나"만 보여주는 창문이다.
+- `config={"max_concurrency": 3}`: 동시에 실행되는 Worker 개수를 최대 3개로 제한한다. 지금 실습(목차 4~5개)은 몇 초 안에 끝나서 체감상 의미가 적어 보일 수 있지만, 이건 "시간"이 아니라 **"한순간에 동시에 열리는 API 연결 개수"**를 제한하는 것이다. 목차가 수십 개로 커지면 아무 제한 없이 전부 동시에 API를 두드릴 경우 `429 Too Many Requests`(rate limit) 에러를 만날 수 있다 — 지금 규모보다는 앞으로 더 큰 규모에 쓰일 걸 대비한 안전장치다.
+
+## 8. (곁가지) Gemini Batch API
+
+병렬 처리와 별개로, "지금 당장 답이 안 급한" 대량 작업이라면 **Batch API**라는 선택지도 있다. 요청을 즉시 처리하지 않고 서버가 한가할 때 몰아서 처리하는 대신, 입력/출력 토큰 가격을 **50% 할인**해준다. 최대 24시간 안에는 처리 완료를 보장하며(대부분 그보다 훨씬 빠름), 24시간이 지나도 못 끝낸 요청은 취소되고 완료된 부분만 과금된다. 실시간 응답이 필요 없는 대량 사전 처리(예: 수백 개 문서 야간 일괄 요약) 같은 작업에 적합하다.
 
 ---
 
-# 4. `CurriculumPlan` - 전체 목차의 구조
-
-```python
-class CurriculumPlan(BaseModel):
-```
-
-`CurriculumItem`이 목차 하나를 나타낸다면,
-
-`CurriculumPlan`은 전체 목차 계획을 나타낸다.
-
-즉:
-
-```text
-CurriculumItem
-→ 목차 하나
-
-CurriculumPlan
-→ 전체 목차 계획
-```
-
----
-
-## `items: list[CurriculumItem]`
-
-```python
-items: list[CurriculumItem] = Field(
-    description="생성된 학습 목차 리스트 (3~5개)"
-)
-```
-
-`items`는 필드 이름이다.
-
-`list[CurriculumItem]`은 타입이다.
-
-의미는:
-
-> `CurriculumItem` 객체들을 담는 리스트
-
-이다.
-
-개념적으로는:
-
-```text
-CurriculumPlan
-└── items (list)
-    ├── CurriculumItem
-    ├── CurriculumItem
-    └── CurriculumItem
-```
-
-각 `CurriculumItem` 안에는:
-
-```text
-title
-description
-```
-
-이 들어간다.
-
-따라서 전체 구조는 대략:
-
-```text
-CurriculumPlan
-└── items
-    ├── { title, description }
-    ├── { title, description }
-    └── { title, description }
-```
-
-처럼 이해할 수 있다.
-
----
-
-# 5. Pydantic 객체와 dict의 차이
-
-Pydantic 모델은 겉으로 보면 dict와 비슷하게 느껴질 수 있지만 실제로는 같은 것이 아니다.
-
-dict는 단순한 키-값 데이터이다.
-
-```python
-{
-    "title": "파이썬 기초"
-}
-```
-
-반면 Pydantic 모델은 정의된 필드와 타입을 가진 모델 객체이다.
-
-그래서 다음과 같이 속성에 접근할 수 있다.
-
-```python
-item.title
-item.description
-```
-
-여기서 `item`은 파이썬의 특별한 내장 함수가 아니다.
-
-`.`은 객체의 속성이나 메서드에 접근하는 문법이다.
-
----
-
-# 6. `:`는 상황에 따라 의미가 다르다
-
-`:`가 항상 타입 힌트라는 것은 아니다.
-
-### 타입 힌트
-
-```python
-title: str
-```
-
-여기서는 `title`의 타입을 나타낸다.
-
-### dict
-
-```python
-{"title": "파이썬 기초"}
-```
-
-여기서는 `:`가 키와 값을 구분한다.
-
-### 조건문
-
-```python
-if condition:
-```
-
-여기서는 실행할 코드 블록의 시작을 나타낸다.
-
-### 슬라이싱
-
-```python
-text[1:3]
-```
-
-여기서는 슬라이스 범위를 나타낸다.
-
-따라서 `:`의 의미는 문맥을 보고 판단해야 한다.
-
----
-
-# 7. `TypedDict`와 LangGraph State
-
-```python
-class CourseState(TypedDict):
-```
-
-여기서는 `BaseModel`이 아니라 `TypedDict`를 사용한다.
-
-`CourseState` 역시 개발자가 정한 이름이다.
-
-`TypedDict`는:
-
-> dict 형태의 데이터에 어떤 키가 있고, 각 키의 값이 어떤 타입인지 알려주는 타입 구조
-
-라고 이해하면 된다.
-
-중요한 점은 `CourseState` 자체가 실제 데이터 저장공간이라는 뜻은 아니라는 것이다.
-
-실제로 움직이는 데이터는 일반적인 dict 형태라고 생각하면 된다.
-
-예:
-
-```python
-state = {
-    "request": "파이썬을 배우고 싶어",
-    "items": [...]
-}
-```
-
-`CourseState`는 이런 dict가 어떤 모양이어야 하는지를 설명한다.
-
----
-
-# 8. 왜 `BaseModel`이 아니라 `TypedDict`를 사용하는가?
-
-둘 다 데이터의 구조를 정의하기 때문에 처음 보면 비슷하다.
-
-하지만 목적이 다르다.
-
-## `BaseModel`
-
-주 목적:
-
-> 데이터 자체를 하나의 모델로 정의하고 검증/구조화하기
-
-주로 이 실습에서는 LLM의 구조화된 출력에 사용한다.
-
-```python
-class CurriculumItem(BaseModel):
-    title: str
-    description: str
-```
-
-## `TypedDict`
-
-주 목적:
-
-> dict 형태의 데이터가 어떤 키와 타입을 가져야 하는지 설명하기
-
-LangGraph에서는 노드 사이에 state가 dict 형태로 전달되므로 State 구조를 표현하는 데 자연스럽다.
-
-```python
-class CourseState(TypedDict):
-    request: str
-    items: list[CurriculumItem]
-```
-
-차이를 간단히 정리하면:
-
-```text
-BaseModel
-→ 데이터 자체를 모델링
-
-TypedDict
-→ dict의 구조를 타입으로 설명
-```
-
-또한 `BaseModel`은 Pydantic을 통한 런타임 검증 등의 기능이 있지만,
-`TypedDict`는 기본적으로 타입 체크를 위한 구조이며 일반 dict처럼 사용된다.
-
----
-
-# 9. BaseModel과 TypedDict의 필드 이름 관계
-
-중요한 질문:
-
-> LLM이 BaseModel로 구조화된 결과를 만들었으면
-> LangGraph의 TypedDict 필드 이름도 반드시 같아야 하는가?
-
-정답:
-
-> 반드시 같은 것은 아니지만, 데이터를 연결하려면 실제로 사용하는 키를 맞추거나 중간에서 변환해야 한다.
-
-현재 코드에서는 이름을 같게 만들어 연결하기 편하게 했다.
-
-LLM 결과:
-
-```python
-class CurriculumPlan(BaseModel):
-    items: list[CurriculumItem]
-```
-
-LLM 결과에서:
-
-```python
-plan.items
-```
-
-로 `items`를 꺼낼 수 있다.
-
-그리고 Graph State에:
-
-```python
-return {
-    "items": plan.items
-}
-```
-
-로 넣는다.
-
-여기서:
-
-```text
-plan.items
-   ↓
-"items"
-   ↓
-Graph State의 items
-```
-
-로 연결된다.
-
-즉, 자동으로 이름을 보고 연결되는 마법이 아니다.
-
-개발자가 `return`에서 직접 연결하는 것이다.
-
----
-
-## 이름이 달라도 가능하다
-
-예를 들어:
-
-```python
-class CurriculumPlan(BaseModel):
-    curriculum_items: list[CurriculumItem]
-
-class CourseState(TypedDict):
-    items: list[CurriculumItem]
-```
-
-처럼 이름이 달라도 된다.
-
-그 경우:
-
-```python
-return {
-    "items": plan.curriculum_items
-}
-```
-
-처럼 개발자가 변환해주면 된다.
-
-따라서:
-
-> BaseModel 필드 이름 = TypedDict 필드 이름
-
-이 반드시 지켜야 하는 규칙은 아니다.
-
-다만 같은 데이터를 자연스럽게 전달하려면 이름을 동일하게 사용하는 경우가 많다.
-
----
-
-# 10. 현재 배우는 `request: str`
-
-```python
-request: str
-```
-
-여기서:
-
-- `request` → State에서 사용하는 키 이름
-- `:` → 타입을 지정한다는 표시
-- `str` → 문자열 타입
-
-즉:
-
-> State의 `request`라는 키에는 문자열이 들어온다.
-
-라는 뜻이다.
-
-예를 들어 실제 데이터는:
-
-```python
-{
-    "request": "파이썬을 처음 배우고 싶어"
-}
-```
-
-처럼 될 수 있다.
-
-그리고 뒤에서는:
-
-```python
-state["request"]
-```
-
-처럼 사용한다.
-
-여기서도 `request`라는 이름은 파이썬이 정해준 이름이 아니다.
-개발자가 이 데이터의 역할을 보고 정한 키 이름이다.
-
----
-
-# 지금까지의 전체 연결
-
-현재까지 배운 내용을 하나로 연결하면:
-
-```text
-사용자 요청
-   ↓
-LLM
-   ↓
-CurriculumPlan (BaseModel)
-   └── items
-        ↓
-create_curriculum()
-   ↓
-return {"items": plan.items}
-   ↓
-LangGraph State
-   ↓
-CourseState (TypedDict)
-   ├── request: str
-   ├── items: list[CurriculumItem]
-   ├── results: ...
-   └── final_material: str
-```
-
-핵심은 두 가지이다.
-
-1. `BaseModel`은 LLM이 만들어낼 구조화된 결과를 정의한다.
-2. `TypedDict`는 LangGraph에서 노드들이 공유하는 State dict의 구조를 설명한다.
-
-그리고 둘 사이의 실제 데이터 연결은 노드 함수의 `return`과 `state[...]` 등을 통해 이루어진다.
-
----
-
-# 질문하면서 생긴 중요한 포인트
-
-## Q. `BaseModel`이 있으면 필드마다 LLM을 따로 호출하는가?
-
-아니다.
-
-예를 들어:
-
-```python
-class CurriculumItem(BaseModel):
-    title: str
-    description: str
-```
-
-이 구조가 있다고 해서 `title` 호출 한 번, `description` 호출 한 번이 되는 것이 아니다.
-
-한 번의:
-
-```python
-planner.invoke(...)
-```
-
-호출에서 `title`과 `description`을 포함한 구조화된 결과를 받을 수 있다.
-
----
-
-## Q. `Field(description=...)`의 description은 프롬프트인가?
-
-일반적인 프롬프트 문자열을 직접 작성한 것은 아니다.
-
-`Field()`에 메타데이터를 붙이고, LangChain의 구조화 출력 과정에서 이 정보가 스키마/구조화 출력 계약을 만드는 데 활용될 수 있다.
-
-따라서 느슨하게 "LLM에게 이 필드가 뭔지 알려주는 설명"이라고 이해할 수 있지만,
-정확하게는 Pydantic 필드의 메타데이터이다.
-
----
-
-## Q. `TypedDict`가 `BaseModel`보다 무조건 좋은가?
-
-아니다.
-
-둘은 목적이 다르다.
-
-이 코드에서는:
-
-- LLM 출력 → `BaseModel`
-- LangGraph State → `TypedDict`
-
-라는 역할 분담을 하고 있다.
-
----
-
-# 현재까지 한 줄 요약
-
-```text
-BaseModel
-→ LLM 출력의 구조를 정의
-
-TypedDict
-→ LangGraph State로 사용할 dict의 구조를 정의
-
-Field
-→ BaseModel 필드에 설명/설정 추가
-
-request: str
-→ State의 request 키에는 문자열이 들어온다고 선언
-```
+## ✅ 확인 질문
+
+1. 18번(고정 병렬)과 19번(Orchestrator-Worker)에서 "몇 개의 하위 작업이 필요한지"를 아는 시점이 어떻게 다른가?
+2. `CourseState`와 `WorkerState`를 굳이 둘로 나눈 이유는 무엇인가?
+3. `task_id`가 "서로 다른 Worker를 구분하는 값"이 아니라면, 정확히 무슨 역할을 하는가?
+4. `with_structured_output`은 왜 아무 파이썬 클래스나 받아줄 수 없는가?
+5. 노드가 LLM을 사용했다고 해서, 그 노드의 반환값이 항상 텍스트인 것은 아닌 이유는?
+6. `assign_learning_workers`가 `add_node`로 등록되지 않는 이유는?
+7. `add_conditional_edges`의 세 번째 인자(`path_map`)가 `tools_condition`을 쓸 때는 생략됐는데, `assign_learning_workers`를 쓸 때는 왜 필요한가?
+8. Worker의 반환값을 `{"results": {...}}`가 아니라 `{"results": [{...}]}`처럼 리스트로 감싸는 이유는?
+9. `result.text`는 어느 라이브러리 소속이고, `.content` 대신 왜 추가됐는가?
+10. `sorted(..., key=lambda x: x["task_id"])`에서 `lambda`는 무슨 역할을 하는가?
+11. list comprehension과 generator expression은 겉보기에 비슷한데, 실제로 어떤 시점에 값을 계산하는지가 어떻게 다른가?
+12. `.invoke()`와 `.stream()`은 그래프 실행 결과를 각각 언제, 어떤 단위로 돌려주는가?
+13. `stream_mode="updates"`와 `"messages"`는 각각 어떤 단위로 "실시간"을 보여주는가?
+14. `chunk`가 매번 덮어씌워진다면, Worker 결과가 실제로 누적되는 곳은 어디인가?
+15. `max_concurrency`가 "시간 제한"이 아니라 "동시성 제한"이라는 게 왜 중요한가?
+16. Gemini Batch API가 실시간 요청보다 저렴한 이유는 무엇인가?
