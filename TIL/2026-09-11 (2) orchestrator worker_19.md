@@ -1,6 +1,63 @@
 
 
 
+[TIL] LangGraph Orchestrator-Worker 패턴 & 동적 병렬 처리(Send API)
+💡 Today I Learned Summary
+LangGraph에서 사용자 요청에 따라 실행 시점에 하위 작업 개수를 동적으로 결정하고, 여러 Worker를 병렬로 실행하는 Orchestrator-Worker 패턴과 Send API 활용법, 그리고 API 과부하 방지를 위한 Rate Limit 대응 기법에 대해 학습했다.
+
+1. Orchestrator-Worker 패턴이란?
+개념: 입력 요청에 따라 Orchestrator(지휘자 LLM)가 계획을 세워 하위 작업을 분할하고, 여러 Worker(일꾼 LLM)가 각각의 담당 작업을 동적으로 병렬 실행한 뒤, 결과를 하나로 모아 종합하는 패턴.
+
+고정 병렬 처리(18강)와의 차이점:
+
+18강 (고정 병렬 처리): 그래프 작성 시점에 실행할 노드의 종류와 개수가 미리 고정되어 있음.
+
+19강 (Orchestrator-Worker): 실행 시점(Runtime)에 사용자 요청에 따라 필요한 Worker 수(예: 3개 또는 5개)가 동적(Dynamic)으로 결정됨.
+
+2. 핵심 구현 구성 요소
+Orchestrator (create_plan):
+
+사용자 요청을 분석하여 실행할 하위 작업 목록을 생성함.
+
+with_structured_output을 사용해 Pydantic 모델 형태의 구조화된 데이터 목록으로 반환받음.
+
+Send API (동적 Fan-out의 핵심):
+
+라우팅 함수(assign_workers)에서 Send("노드이름", worker_state) 객체 리스트를 반환함.
+
+LangGraph는 리스트의 길이만큼 지정된 Worker 노드를 독립된 입력값과 함께 동적으로 병렬 실행시킴.
+
+Worker (analyze_task):
+
+각 Worker는 전달받은 개별 WorkerState를 기반으로 자기 담당 항목만 집중 분석함.
+
+3. 병렬 처리 문제 해결 공식 (18강 복습 & 응용)
+State 충돌 방지 (Reducer):
+
+여러 Worker가 동일한 State 필드에 결과를 쓸 때 덮어씌워지는 현상을 방지함.
+
+results: Annotated[list, operator.add] 처럼 Reducer를 지정해 리스트 형태로 결과가 차곡차곡 누적되도록 처리함.
+
+순서 엉킴 방지 (task_id 정렬):
+
+비동기/병렬 실행 특성상 Worker의 완료 순서는 매번 달라짐 (비결정적).
+
+Orchestrator가 부여한 task_id(순서 번호표)를 반환값에 포함시키고, 종합 노드(make_report)에서 sorted()로 정렬하여 원래 계획된 순서대로 보고서를 생성함.
+
+4. API 과부하 방지 (Rate Limit & max_concurrency)
+Rate Limit (429 Too Many Requests 에러):
+
+LLM API Provider는 서버 보호를 위해 분당 요청 수(RPM), 토큰 수(TPM) 등을 제한하며, 한계 초과 시 대기열에 넣지 않고 즉시 거절 에러를 보냄.
+
+병렬 Worker가 한 번에 너무 많이 실행되면 Rate Limit에 쉽게 도달함.
+
+해결책 (max_concurrency):
+
+config={"max_concurrency": 3} 옵션을 설정하여 동시에 실행되는 Worker의 최대 개수를 제한함.
+
+전체 작업이 많더라도 정해진 개수만큼 순차적으로 밸브를 조절하여 프로그램이 튕기는 것을 방지함.
+
+
 ================================================================================
 📝 TODAY I LEARNED: LangGraph Orchestrator-Worker Architecture
 ================================================================================
