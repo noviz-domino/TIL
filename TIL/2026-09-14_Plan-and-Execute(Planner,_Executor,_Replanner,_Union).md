@@ -1,8 +1,21 @@
+---
+tags: [langgraph, plan-and-execute, structured-output, reducer, state-machine]
+til: v2 2026-09-14
+---
+
 # Plan-and-Execute (Planner, Executor, Replanner, Union)
+> 작성일: 2026-09-14
+
+## 🔗 관련 글
+
+- [LangGraph 기초(State, Node, Edge와 조건부분기, 반복, Reducer)](2026-09-08_LangGraph_기초(State_Node_Edge와_조건부분기_반복_Reducer).md) — State/Reducer/조건부 엣지가 오늘 그래프의 기반 구조
+- [ReAct Agent(Tool, ToolNode, tools_condition, MessagesState)](2026-09-09_(1)_ReAct_Agent(Tool,_ToolNode,_tools_condition,_MessagesState).md) — 오늘 비교 대상(매 순간 판단 vs 전체 계획 선수립)
+- [Guardrails(Input Guardrail, Output Guardrail, Fail-Closed)](2026-09-10 (2) Guardrails(Input_Guardrail,_Output_Guardrail,_Fail-Closed).md) — Structured Output이 "모양"과 "값"을 강제하는 두 층위를 먼저 다룸
+- [orchestrator worker](2026-09-11 (2) orchestrator worker.md) — 작업을 여러 하위 단계로 쪼개 처리한다는 점에서 Plan-and-Execute와 같은 계열의 패턴
 
 ## Plan-and-Execute란
 
-지금까지 배운 ReAct는 매 순간 "다음에 뭘 할지"만 판단했다. Plan-and-Execute는 그 앞에 **전체 계획을 먼저 세우는 단계**를 추가한 패턴이다.
+지금까지 배운 ReAct는 매 순간 "다음에 뭘 할지"만 판단한다. Plan-and-Execute는 그 앞에 **전체 계획을 먼저 세우는 단계**를 추가한 패턴이다.
 
 ```
 입력 → Planner(전체 계획 수립) → Executor(한 단계 실행) → Replanner(판단) → Executor → ... → 최종 응답
@@ -16,11 +29,11 @@
 | 적합한 작업 | 단일 조회, 간단한 질의 | 조사, 비교, 일정 설계, 보고서 작성 |
 
 세 가지 역할이 핵심이다.
-- **Planner**: 사용자 요청을 보고 실행할 단계 목록을 만듦 (LLM이 수립, 딱 한 번만 실행됨)
-- **Executor**: 그 목록의 **첫 번째 단계만** 실제로 실행함
-- **Replanner**: 실행 결과를 보고 "정보가 부족하니 계획을 다시 짜자" 또는 "이제 충분하니 최종 답을 만들자"를 판단
+- **Planner**: 사용자 요청을 보고 실행할 단계 목록을 만든다 (LLM이 수립, 딱 한 번만 실행됨)
+- **Executor**: 그 목록의 **첫 번째 단계만** 실제로 실행한다
+- **Replanner**: 실행 결과를 보고 "정보가 부족하니 계획을 다시 짜자" 또는 "이제 충분하니 최종 답을 만들자"를 판단한다
 
-Executor ↔ Replanner가 "충분해질 때까지" 반복되는 구조이며, 이 반복은 17번(Reflection/Evaluator-Optimizer)의 "생성 → 검토 → 다시 생성" 루프와 뼈대가 같다.
+Executor ↔ Replanner가 "충분해질 때까지" 반복되는 구조이며, 이 반복은 Reflection/Evaluator-Optimizer의 "생성 → 검토 → 다시 생성" 루프와 뼈대가 같다.
 
 ## State 설계
 
@@ -32,7 +45,7 @@ class PlanExecuteState(TypedDict):
     response: str
 ```
 
-- **past_steps**: 이미 끝낸 일은 계속 쌓여야 하는 기록이라 `operator.add`(리스트끼리 이어붙이기)로 누적시킨다. 17번의 `history: Annotated[list, add]`와 같은 이유다.
+- **past_steps**: 이미 끝낸 일은 계속 쌓여야 하는 기록이라 `operator.add`(리스트끼리 이어붙이기)로 누적한다.
 - **plan**: Replanner가 남은 계획을 통째로 교체할 수 있어야 하므로 Reducer 없이 그냥 덮어쓴다.
 
 원칙: **"계속 쌓여야 하는 것"엔 Reducer를 붙이고, "완전히 새로 교체돼야 하는 것"엔 안 붙인다.**
@@ -42,7 +55,7 @@ class PlanExecuteState(TypedDict):
 State(`PlanExecuteState`)는 계속 `TypedDict`를 썼는데, `Plan`/`Response`/`ReplanDecision`은 `BaseModel`(Pydantic)을 썼다. 처음엔 "둘 다 BaseModel로 하면 더 안전하지 않나?" 싶었지만, 두 가지 이유로 그렇게 하지 않는다.
 
 1. **노드는 State 전체가 아니라 "바뀐 부분만" 반환한다** (`return {"plan": ...}`). BaseModel이었다면 매번 완전한 객체를 만들어야 해서 번거롭다. TypedDict는 그냥 dict라 부분 반환이 자연스럽다.
-2. **검증은 "믿을 수 없는 곳"(LLM 출력)에서만 하면 충분하다.** State에 들어가는 값은 이미 `Plan`/`Response` 같은 BaseModel을 통해 한 번 검증된 뒤이므로, State 자체를 또 검증하는 건 낭비다. 16번(Guardrails)에서 배운 "측정 가능한 건 필요한 곳에서만 검사한다"는 원칙과 같다.
+2. **검증은 "믿을 수 없는 곳"(LLM 출력)에서만 하면 충분하다.** State에 들어가는 값은 이미 `Plan`/`Response` 같은 BaseModel을 통해 한 번 검증된 뒤이므로, State 자체를 또 검증하는 건 낭비다. "측정 가능한 건 필요한 곳에서만 검사한다"는 원칙과 같다.
 
 정리: **State(내부 데이터 흐름) = TypedDict(가벼움), LLM 출력(신뢰 못 하는 입력) = BaseModel(검증)**.
 
@@ -61,7 +74,7 @@ def plan_step(state: PlanExecuteState):
     return {"plan": result.steps}
 ```
 
-- `steps: list[str]`은 **모양(타입)만 강제**하고 내용은 자유다. 16번(Guardrails)의 `Literal["safe", "unsafe", ...]`는 **값까지** 강제하는 것과 대비된다 — Structured Output이 강제하는 게 "모양"과 "값" 두 층위로 나뉜다는 걸 여기서 확인했다.
+- `steps: list[str]`은 **모양(타입)만 강제**하고 내용은 자유다. Guardrails의 `Literal["safe", "unsafe", ...]`는 **값까지** 강제하는 것과 대비된다 — Structured Output이 강제하는 게 "모양"과 "값" 두 층위로 나뉜다는 걸 여기서 확인했다.
 - `planner`(체인, 파이프라인)과 `Plan`(그 파이프라인이 만들어낼 데이터의 틀)은 서로 다른 물건이다. `planner.invoke(...)`를 실행하면 파이프라인 자체가 아니라, 그 파이프라인을 통과한 **최종 결과물**(Plan 인스턴스)이 나온다.
 
 ## Executor
@@ -76,7 +89,7 @@ def execute_step(state: PlanExecuteState):
     return {"past_steps": [(current_step, result.text)]}   # Reducer 덕에 기존 리스트 뒤에 누적됨
 ```
 
-`{"google_search": {}}`는 12번에서 직접 만든 함수를 `@tool`로 감싸던 것과 달리, **Gemini가 이미 내장하고 있는 검색 기능을 그대로 켜는 것**이다.
+`{"google_search": {}}`는 직접 만든 함수를 `@tool`로 감싸던 것과 달리, **Gemini가 이미 내장하고 있는 검색 기능을 그대로 켜는 것**이다.
 
 ## Replanner — Union과 isinstance
 
@@ -139,11 +152,11 @@ graph_builder.add_conditional_edges(
 config = {"recursion_limit": 20}
 ```
 
-노드 실행의 **총 횟수 상한**이다. 같은 노드를 반복 실행하는 것도 매번 횟수에 포함되며, 초과하면 `GraphRecursionError`가 발생한다. 17번의 `MAX_ITERATIONS`(State 안에 직접 만든 카운터)와 목적은 같지만, 이번엔 LangGraph가 그래프 실행 전체에 제공하는 별도 안전장치(config)를 쓴다는 차이가 있다.
+노드 실행의 **총 횟수 상한**이다. 같은 노드를 반복 실행하는 것도 매번 횟수에 포함되며, 초과하면 `GraphRecursionError`가 발생한다. Reflection/Evaluator-Optimizer의 `MAX_ITERATIONS`(State 안에 직접 만든 카운터)와 목적은 같지만, 이번엔 LangGraph가 그래프 실행 전체에 제공하는 별도 안전장치(config)를 쓴다는 차이가 있다.
 
 이 코드엔 `try`/`except`가 없어서, 실제로 20번을 넘기면 에러가 그대로 튀어나오며 멈춘다. 실무라면 `GraphRecursionError`를 잡아서 "지금까지 조사한 내용을 참고해달라"는 식으로 부드럽게 처리하는 게 맞다.
 
-**LangGraph가 왜 노드별 개별 제한이 아니라 총합 하나만 제공하는가**: LangGraph는 범용 라이브러리라 어떤 노드가 몇 번 반복될지, 어떤 노드 이름을 쓸지 미리 알 수 없다. "전체가 무한히 안 돌게 막는다"는 모두에게 공통으로 필요한 위험이라 라이브러리가 총합 하나로 제공하고, "이 노드는 몇 번까지만"처럼 서비스마다 다른 세부 규칙은 State에 카운터를 직접 만들어서(17번 방식) 구현하도록 열어둔다.
+**LangGraph가 왜 노드별 개별 제한이 아니라 총합 하나만 제공하는가**: LangGraph는 범용 라이브러리라 어떤 노드가 몇 번 반복될지, 어떤 노드 이름을 쓸지 미리 알 수 없다. "전체가 무한히 안 돌게 막는다"는 모두에게 공통으로 필요한 위험이라 라이브러리가 총합 하나로 제공하고, "이 노드는 몇 번까지만"처럼 서비스마다 다른 세부 규칙은 State에 카운터를 직접 만들어서 구현하도록 열어둔다.
 
 ## stream_mode=["updates", "values"]
 
@@ -176,7 +189,7 @@ replanner 쪽에서 `value.get("plan")`/`value.get("response")`로 다시 분기
 
 ## 실습: 2026 생성형 AI 트렌드 조사 + Replanner 없는 버전
 
-- **주 실습**: 여행 계획 예제와 동일한 Planner/Executor/Replanner 구조를 그대로 재사용하고, 도메인(AI 트렌드)에 맞게 프롬프트만 새로 작성했다. `MODEL_NAME`은 CLAUDE.md 규칙에 따라 `gemini-3.6-flash`(하루 20회 한도) 대신 `gemini-3.5-flash-lite`(하루 500회)로 교체했다.
+- **주 실습**: 여행 계획 예제와 동일한 Planner/Executor/Replanner 구조를 그대로 재사용하고, 도메인(AI 트렌드)에 맞게 프롬프트만 새로 작성했다. `MODEL_NAME`은 `gemini-3.6-flash`(하루 20회 한도) 대신 `gemini-3.5-flash-lite`(하루 500회)로 교체했다.
 - **추가 실습(Replanner 없는 버전)**: Replanner가 필수 구성요소가 아니라는 걸 확인했다. Executor가 `{"plan": state["plan"][1:], "past_steps": [...]}`을 반환해 직접 계획을 줄여나가고, `has_remaining_plan`(plan이 남았는가)이라는 단순 분기 함수로 executor를 반복시키거나 finalizer로 보낸다. finalizer는 Structured Output이 필요 없다 — 텍스트 응답 하나만 만들면 되기 때문이다.
 
 ## 오늘 배운 것 요약
@@ -193,9 +206,22 @@ replanner 쪽에서 `value.get("plan")`/`value.get("response")`로 다시 분기
 ## ✅ 확인 질문
 
 1. ReAct와 Plan-and-Execute의 핵심 차이는 무엇이며, 어떤 작업에 각각 더 적합한가?
-2. State의 `plan` 필드와 `past_steps` 필드는 왜 Reducer 적용 여부가 다른가?
-3. State는 왜 BaseModel이 아니라 TypedDict를 쓰는가?
-4. `Union[Plan, Response]`와 `isinstance`는 왜 항상 세트로 쓰이는가?
-5. `recursion_limit`이 노드별이 아니라 그래프 전체에 적용되는 이유는 무엇인가?
-6. `stream_mode="values"`(단일)와 `stream_mode=["updates", "values"]`(리스트)의 반환 형태 차이는 무엇인가?
-7. Replanner 없는 버전에서 Executor는 어떻게 "다음에 뭘 할지"를 스스로 갱신하는가?
+2. Planner, Executor, Replanner 세 역할 중 정확히 한 번만 실행되는 것은 무엇이며 그 이유는?
+3. State의 `plan` 필드와 `past_steps` 필드는 왜 Reducer 적용 여부가 다른가?
+4. `operator.add` Reducer가 없다면 executor가 반복 실행될 때 past_steps에 어떤 문제가 생기는가?
+5. State는 왜 BaseModel이 아니라 TypedDict를 쓰는가?
+6. 노드가 State 전체가 아니라 "바뀐 부분만" 반환하는 방식이 TypedDict와 잘 맞는 이유는 무엇인가?
+7. `planner`(체인)와 `Plan`(클래스)은 각각 무엇을 가리키며, `planner.invoke(...)`의 반환값은 어느 쪽의 인스턴스인가?
+8. `steps: list[str]`처럼 "모양만 강제"하는 것과 `Literal[...]`처럼 "값까지 강제"하는 것의 차이는 무엇인가?
+9. `search_llm.bind_tools([{"google_search": {}}])`는 12번에서 직접 만든 함수를 `@tool`로 감싸는 방식과 무엇이 다른가?
+10. `Union[Plan, Response]`만 선언하고 `isinstance`로 확인하지 않으면 어떤 문제가 생기는가?
+11. `should_continue`가 실제로 "계속할지 말지"를 판단하는가, 아니면 이미 내려진 판단을 확인만 하는가?
+12. LangChain의 `|`(LCEL)와 LangGraph의 `add_edge`/`add_conditional_edges`는 자료구조 관점에서 어떻게 다른가?
+13. `"continue": "executor"` 엣지가 없다면 이 그래프에서 반복(사이클)이 가능한가?
+14. `recursion_limit`은 왜 노드별이 아니라 그래프 전체에 적용되는가?
+15. `recursion_limit`을 초과하면 코드가 어떻게 되는가, 그리고 실무라면 이를 어떻게 처리해야 하는가?
+16. `stream_mode="values"`(단일)와 `stream_mode=["updates", "values"]`(리스트)의 반환 형태 차이는 무엇인가?
+17. "updates" 모드와 "values" 모드가 각각 담고 있는 내용은 무엇인가?
+18. replan_step 내부와 출력 코드에서 Plan/Response를 구분하는 방법(`isinstance` vs `value.get(...)`)이 다른 이유는 무엇인가?
+19. Replanner 없는 버전에서 Executor는 어떻게 "다음에 뭘 할지"를 스스로 갱신하는가?
+20. Replanner 없는 버전의 finalizer는 왜 Structured Output이 필요 없는가?
