@@ -1,10 +1,10 @@
 ---
 tags: [langgraph, multi-agent, handoff, command, tool-runtime, state]
-til: v2 2026-09-19
+til: v2 2026-09-18
 ---
 
-# 2026-09-19_Handoff(Handoff_Tool,_Command.PARENT,_ToolRuntime)
-> 작성일: 2026-09-19
+# 2026-09-18_Handoff(Handoff_Tool,_Command.PARENT,_ToolRuntime)
+> 작성일: 2026-09-18
 
 ## 🔗 관련 글
 
