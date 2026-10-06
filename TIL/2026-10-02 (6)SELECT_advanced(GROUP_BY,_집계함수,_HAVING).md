@@ -1,6 +1,6 @@
 ---
 tags: [sql, group-by, having, aggregate-function, select]
-til: v2 2026-10-06
+til: v2 2026-10-02
 ---
 
 # 2026-10-02_SELECT_advanced(GROUP_BY,_집계함수,_HAVING)
