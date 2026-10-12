@@ -16,7 +16,11 @@ til: v2 2026-10-12
 
 ## ❓ 아직 모르겠는 것
 
-- **이 글은 수업 32번(`32-postgres-agent.ipynb`)의 앞부분까지만 정리했다.** `DB 권한 확인`의 반복문 안쪽(`try / except / else`) 이후는 아직 진행하지 못했다. 이후 구간(읽기 전용 조회 함수 `fetch_rows`, `%s` 바인딩과 `@tool`, 고정 SQL 도구, Text-to-SQL, SQL 검사, 재시도 그래프, 실습)은 이어서 이 파일에 보강한다.
+- **이 글은 수업 32번(`32-postgres-agent.ipynb`)의 `DB 권한 확인` 구간(반복문 안쪽의 `try / except / else`와 `with conn.transaction(force_rollback=True)`)까지 정리했다.** 이후 구간(읽기 전용 조회 함수 `fetch_rows`, `%s` 바인딩과 `@tool`, 고정 SQL 도구, Text-to-SQL, SQL 검사, 재시도 그래프, 실습)은 아직 진행하지 못했다. 이어서 이 파일에 보강한다.
+- **다음에 이어서 볼 곳**: `DB 권한 확인`의 마지막 `except` / `else` 줄을 코드 그대로 다시 읽고, 그다음 구간인 `SQL 조회 함수`(`conn.read_only = True`, `fetch_rows`)부터 진행한다.
+- **VS Code PostgreSQL 확장이 SQL을 실행할 때 자동으로 확정(autocommit)하는지**는 설정으로 확인하지 못했다. `CREATE ROLE`, `GRANT`를 `COMMIT` 없이 실행하고 바로 접속이 됐다는 사실로 자동 확정으로 동작한다고 **추정**했다.
+- 아래 "주제 6"의 **"`commit()` 없이 연결을 닫으면 변경이 남지 않는다"** 와 `autocommit=False`에서 `transaction()`이 이미 시작된 트랜잭션 안에서 쓰일 때의 동작(중첩)은 일반 지식이고 직접 실행해 확인하지 못했다.
+- **다른 컴퓨터에서 이어서 하려면** 필요한 것: ① 이 저장소와 `aim-ai-agent-practice`를 `git pull`, ② 라이브러리 설치(`pip install -r requirements.txt python-dotenv ipykernel`), ③ `aim_home/.env`(Gemini 키, `POSTGRES_PASSWORD`, `AGENT_POSTGRES_PASSWORD`), ④ 그 컴퓨터의 PostgreSQL에 **`world` DB가 있고 `agent_reader` 계정이 만들어져 있어야 한다**(계정과 DB는 DB 안에 있어서 `git pull`로 오지 않는다).
 - 노트북 셀을 **직접 실행한 결과**는 확인하지 못했다. 이 글의 출력 예시 중 "직접 실행해 확인"이라고 표시하지 않은 것은 코드로 추정한 것이다.
 - `ORDER BY` 없이 `LIMIT 3`을 하면 **어떤 3줄이 나오는지는 보장되지 않는다.** 노트북 예시의 도시 이름은 확인한 결과가 아니라 정렬해서 본 값이다.
 - psycopg의 **서버 쪽 커서**(결과가 아주 클 때 한 줄씩 받는 방식)와 `for row in 커서:` 반복은 일반 지식으로만 알고 직접 확인하지 못했다.
@@ -412,6 +416,61 @@ for query in queries:
 
 `queries`(리스트 전체, 복수)와 `query`(한 번에 하나, 단수)를 구분한다. 반복문이 없으면 같은 코드를 세 번 복사해야 한다.
 
+### ④ `try / except / else`
+
+```python
+    try:
+        with psycopg.connect(DB_URI) as conn:
+            with conn.transaction(force_rollback=True):
+                conn.execute(query)
+    except psycopg.errors.InsufficientPrivilege:
+        print("권한이 없어 차단됨:", query)
+    else:
+        print("실행 허용됨 — 계정의 권한을 확인하세요.:", query)
+```
+
+```text
+try 안의 코드 실행
+   ├─ 오류 없음 → 끝까지 실행 → except 건너뜀 → else 실행
+   └─ 오류 남   → 그 줄에서 중단 → 맞는 except로 이동
+```
+
+| 상황 | 실행되는 것 |
+|---|---|
+| `try` 안에서 **권한 오류**(`InsufficientPrivilege`)가 남 | `except` 줄 → "차단됨" 출력 |
+| `try` 안에서 **오류가 없음** | `else` 줄 → "실행 허용됨, 권한을 확인하세요" 출력 |
+
+이 코드의 목적이 **"차단되는 것이 정상"** 이라서 오류가 없으면 오히려 경고(`else`)를 낸다. `raise`는 오류를 **내는** 것이고 `try / except`는 오류를 **받아서 처리하는** 쪽이다.
+
+### ⑤ `with conn.transaction(force_rollback=True):`
+
+> ♻️ 처음엔 쿼리를 실행하는 명령이 `execute`인데 **왜 `transaction`이라는 명령이 나오는가** 의아했으나, **`transaction()`은 쿼리를 실행하는 명령이 아니다.** 쿼리 실행은 **여전히 `execute`** 가 하고, `transaction()`은 그 실행을 **하나의 묶음으로 감싸는 범위**(울타리)를 만든다.
+
+| 코드 | 하는 일 | SQL 대응 |
+|---|---|---|
+| `conn.transaction(...)` | 트랜잭션 범위를 연다 | `BEGIN;` |
+| **`conn.execute(query)`** | **쿼리를 실행** | `INSERT ...;` 등 |
+| 블록이 끝날 때 (`force_rollback=True`) | **무조건 되돌린다** | `ROLLBACK;` |
+
+권한이 없으면 `execute`에서 오류가 나서 어차피 실행되지 않지만, **권한이 실수로 있다면** `execute`는 성공하고 **울타리가 끝날 때 롤백**되어 데이터가 확정되지 않는다. (`WHERE FALSE`에 롤백까지 두 겹이다.)
+
+**블록이 끝날 때 무슨 일이 일어나는가 (임시 테이블로 직접 실행해 확인)**
+
+| 단계 | 블록 | 행 수 | 의미 |
+|---|---|---|---|
+| 처음 | | 0 | |
+| ① | `with c.transaction():` 안에서 INSERT | **1** | **블록이 끝나자 자동 COMMIT됨** |
+| ② | `with c.transaction(force_rollback=True):` 안에서 INSERT | **1** (그대로) | **ROLLBACK**되어 두 번째 INSERT가 사라짐 |
+| ③ | 블록 안에서 **오류**가 남 | **1** (그대로) | 오류가 나면 **자동 ROLLBACK** |
+
+| 상황 | 블록이 끝날 때 |
+|---|---|
+| 오류 없이 끝남 (일반) | **자동 `COMMIT`** |
+| `force_rollback=True` | **무조건 `ROLLBACK`** |
+| 블록 안에서 오류가 남 | **자동 `ROLLBACK`** |
+
+> 이 실험은 `autocommit=True` 연결에서 했다. 노트북의 권한 확인 코드는 연결 직후 `transaction()`을 바로 열어서 같은 방식이다.
+
 ### 왜 3줄을 한 번에 보내지 않고 하나씩 보내는가 (직접 실행해 확인)
 
 SQL 세 개를 `;`로 이어 **한 번의 `execute`로** 보내면 어떻게 되는지 실험했다.
@@ -425,8 +484,79 @@ SQL 세 개를 `;`로 이어 **한 번의 `execute`로** 보내면 어떻게 되
 
 ---
 
+## 주제 6: 트랜잭션과 COMMIT 개념 (질문으로 정리)
+
+`테이블 생성`과 `검색` 정도만 알던 상태에서 `COMMIT`, `ROLLBACK`, `autocommit`이 계속 흐릿해서 개념부터 다시 정리했다.
+
+### 왜 트랜잭션이 필요한가 — 은행 이체
+
+철수가 영희에게 1만 원을 이체하면 **① 철수 계좌에서 빼기 ② 영희 계좌에 더하기** 두 단계이다. ①만 하고 정전이 나면 **돈이 허공으로 사라진다.** 그래서 두 단계를 **한 덩어리**로 묶고 **전부 성공하거나 전부 취소**해야 한다.
+
+| 용어 | 뜻 | 쉬운 말 |
+|---|---|---|
+| **트랜잭션** | 여러 작업을 묶은 한 덩어리 | 한 묶음 |
+| **`COMMIT`** | 묶음의 변경을 **확정**한다 | 저장 |
+| **`ROLLBACK`** | 묶음의 변경을 **취소**한다 | 되돌리기 |
+
+문서 편집에 비유하면 **고치는 중**(저장 안 함)이 트랜잭션 진행 중이고, **저장**이 `COMMIT`, **저장 안 하고 되돌리기**가 `ROLLBACK`이다. 확정하기 전의 변경은 **임시 상태**이고 다른 사람에게는 아직 안 보인다. ①만 하고 오류가 나면 묶음 전체를 **`ROLLBACK`** 한다.
+
+`SELECT`는 데이터를 **바꾸지 않아서 확정할 것이 없다.** `INSERT`/`UPDATE`/`DELETE`처럼 데이터가 바뀔 때 확정이 의미가 있다.
+
+> 📝 **기사 시험 포인트** (정보처리기사, 확실도: 높음)
+> "전부 성공하거나 전부 취소"는 트랜잭션의 **원자성(Atomicity)** 이다. 트랜잭션의 특성은 **ACID**(원자성, 일관성, 격리성, 영속성)이다. `COMMIT`·`ROLLBACK`은 교재에 따라 DCL에 포함하기도 하고 **TCL**(트랜잭션 제어어)로 따로 분류하기도 한다.
+
+### 트랜잭션을 안 만들면 `COMMIT`을 안 써도 되는가?
+
+> ♻️ 처음엔 **"트랜잭션으로 안 만들면 커밋은 안 써도 된다"** 고 이해했다. 반은 맞다. **"트랜잭션이 없는 것"이 아니라 "문장 하나가 곧 하나의 트랜잭션"** 이다. 내가 묶지 않아도 DB가 문장마다 알아서 묶고 확정한다(자동 커밋).
+
+| 환경 | 기본 동작 | `COMMIT`을 직접 써야 하나 |
+|---|---|---|
+| **SQL 파일**에서 문장을 그냥 실행 | 문장마다 자동 확정 | ❌ 필요 없음 |
+| SQL에서 **`BEGIN;`으로 직접 열었음** | 끝날 때까지 임시 상태 | ✅ `COMMIT;` 또는 `ROLLBACK;`으로 끝내야 함 |
+| **파이썬 psycopg 기본**(`autocommit=False`) | **묶음이 자동으로 시작**됨 | ✅ `commit()`을 해야 확정 |
+| 파이썬 **`autocommit=True`** | 문장마다 자동 확정 | ❌ 필요 없음 |
+
+- 31번에서 `autocommit=True`를 쓴 이유가 이것이다. "문장마다 바로 확정해 줘"라는 설정이다.
+- 앞에서 `print(result)`로 본 **`[INTRANS]`** 는 "지금 트랜잭션 안에 있다"는 뜻이다. `SELECT`만 했는데도 파이썬(`autocommit=False`)은 묶음을 열어 두고 있었다.
+- 묶음이 열려 있지 않은데 `COMMIT;`을 실행해도 오류로 멈추지 않고 경고 정도가 나오는 것으로 알고 있다.
+- 파이썬의 `conn.commit()`과 SQL의 `COMMIT;`은 **같은 커밋**이다.
+
+### "먼저 해 보고 결과를 보고 확정할지 결정"하려면
+
+```sql
+BEGIN;                                              -- ① 묶음 시작
+UPDATE city SET population = 0 WHERE id = 1;        -- ② 변경 (아직 임시)
+SELECT id, name, population FROM city WHERE id = 1; -- ③ 결과 확인 (내 연결에서는 바뀐 값이 보임)
+COMMIT;                                             -- ④-a 마음에 들면 확정
+-- ROLLBACK;                                        -- ④-b 아니면 취소 (둘 중 하나만)
+```
+
+```python
+conn = psycopg.connect(DB_URI)       # autocommit 꺼짐 → 묶음이 자동 시작
+conn.execute("UPDATE city SET population = 0 WHERE id = 1")     # 변경 (임시)
+row = conn.execute("SELECT population FROM city WHERE id = 1").fetchone()   # 결과 확인
+conn.commit()          # 마음에 들면 확정
+# conn.rollback()      # 아니면 취소
+conn.close()
+```
+
+> 위 코드는 일반적인 사용법이며 실제 데이터를 바꾸는 코드라서 직접 실행해 확인하지는 않았다.
+
+| 방법 | 끝났을 때 |
+|---|---|
+| `with conn.transaction():` | 오류가 없으면 **자동 `COMMIT`** (직접 결정할 수 없음) |
+| `conn.commit()` / `conn.rollback()`을 **직접** | **내가 결정** (확인한 뒤 확정·취소) |
+| `force_rollback=True` (노트북) | **무조건 `ROLLBACK`** (확인만 하고 흔적을 남기지 않음) |
+
+**"결과를 보고 결정"** 하려면 `with conn.transaction():`이 아니라 `commit()`/`rollback()`을 직접 쓴다. 지켜야 할 것: **같은 연결을 유지**해야 하고(묶음은 하나의 연결 안에서만 살아 있다), **너무 오래 열어 두지 않는다**(같은 행을 쓰려는 다른 사람이 기다릴 수 있다).
+
+---
+
 ## 정리
 
+- **`DB 권한 확인`의 `try / except / else`**: 오류가 나면 `except`, **오류가 없으면 `else`**. 이 코드는 **차단이 정상**이라서 오류가 없으면 경고(`else`)를 낸다. `raise`는 오류를 내고 `try/except`는 받아서 처리한다.
+- **`transaction()`은 쿼리 실행이 아니라 묶음 범위**이다. 실행은 `execute`가 한다. `with conn.transaction():`은 블록이 끝나면 **자동 COMMIT**(오류면 ROLLBACK), `force_rollback=True`는 **무조건 ROLLBACK**이다(임시 테이블 실험으로 확인).
+- **트랜잭션**: 여러 작업을 묶어 전부 성공하면 `COMMIT`(확정), 하나라도 실패하면 `ROLLBACK`(취소). 문장 하나가 곧 하나의 트랜잭션이라 SQL 파일에서는 `BEGIN` 없이 `COMMIT`이 필요 없고, **파이썬 기본(`autocommit=False`)** 에서는 `commit()`이 필요하다. 먼저 해 보고 결정하려면 `BEGIN → 변경 → SELECT 확인 → COMMIT/ROLLBACK`.
 - **이번 수업 32번의 목표**: LLM이 `world` DB를 조회하는 에이전트. **고정 SQL 도구**(개발자가 SQL 작성, LLM은 도구·인자 선택)와 **Text-to-SQL**(LLM이 SQL 생성)을 비교한다. Text-to-SQL은 위험해서 **안전장치 3겹**(DB 계정 권한, 읽기 전용 연결, 실행 전 SQL 검사)을 둔다 — 다층 방어, 최소 권한의 원칙.
 - **DCL**: `GRANT`(권한 부여), `REVOKE`(회수). `agent_reader`에게 `CONNECT`, `USAGE`, `SELECT`만 준다. 계정은 `.sql` 파일에서 **관리자로 `world`에 연결해** 만든다. 이미 만든 계정의 비밀번호는 `CREATE`가 아니라 `ALTER ROLE`로 바꾼다. 예시 비밀번호를 그대로 쓰지 않는다.
 - **접속 주소 만들기**: `.env` → `load_dotenv` → `os.getenv("이름", "기본값")`(기본값은 DB에 만든 계정·DB 이름) → 비밀번호가 없으면 `raise ValueError`(빠른 실패) → `quote(safe="")`(특수문자 안전 변환, 한 번만) → f-string으로 `DB_URI` 조립. 이 단계는 **DB에 접속하지 않는다.**
@@ -465,3 +595,11 @@ SQL 세 개를 `;`로 이어 **한 번의 `execute`로** 보내면 어떻게 되
 24. `for query in queries:`에서 `queries`와 `query`의 차이는? 두 번째 반복에서 `query`에는 무엇이 담기는가?
 25. 변경 SQL 3개를 `;`로 이어 한 번에 보내지 않고 하나씩 보내는 이유는? (실험 결과로 설명하라)
 26. 마크다운 셀 안의 예시 코드는 왜 실행되지 않는가? 직접 돌려 보려면 어떻게 하는가?
+27. `try / except / else`에서 `else`는 언제 실행되는가? 이 권한 확인 코드에서 `except`와 `else`는 각각 어떤 의미인가(차단이 정상인 이유)?
+28. `conn.transaction()`은 쿼리를 실행하는 명령인가? `execute`와 역할이 어떻게 다른가? SQL의 `BEGIN`/`ROLLBACK`과 어떻게 대응되는가?
+29. `with conn.transaction():`은 블록이 끝날 때 자동으로 `COMMIT`되는가? `force_rollback=True`일 때와 블록 안에서 오류가 났을 때는 각각 어떻게 되는가? (실험 결과로 설명하라)
+30. 트랜잭션이 필요한 이유를 은행 이체로 설명하라. `COMMIT`과 `ROLLBACK`은 각각 무엇인가? ①만 하고 오류가 나면 무엇을 해야 하는가?
+31. SQL 파일에서 `BEGIN` 없이 `UPDATE`를 실행하면 `COMMIT`이 필요한가? `BEGIN`으로 직접 열었을 때는? "문장 하나가 곧 하나의 트랜잭션"이란 무슨 뜻인가?
+32. 파이썬 psycopg의 기본(`autocommit=False`)에서는 왜 `commit()`이 필요한가? `autocommit=True`는 무엇을 바꾸는가? `[INTRANS]`는 무슨 뜻인가?
+33. 변경을 먼저 해 보고 결과를 확인한 뒤 확정·취소를 결정하는 흐름을 SQL과 파이썬으로 써라. 이때 지켜야 할 것 두 가지는?
+34. (기사 대비) 트랜잭션의 원자성은 무엇인가? ACID는? `COMMIT`·`ROLLBACK`은 DCL과 TCL 중 어디에 분류하는가?
